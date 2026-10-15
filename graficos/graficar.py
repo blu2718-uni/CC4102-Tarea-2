@@ -9,7 +9,8 @@ Entradas (en --resultados):
     consulta0_N{E}.csv                        pares de la búsqueda 0 para N = 2^E
     alpha_{BE126,BE4}.csv, alpha_*_busquedas.csv   experimento bonus de α (N = 2^24)
 
-Salidas (en --salida): figuras SVG y tablas CSV ya formateadas que lee informe.typ.
+Salidas (en --salida): figuras SVG, tablas CSV ya formateadas y valores.json (todos los
+números y afirmaciones del texto del informe; ver graficos/valores.py), que lee informe.typ.
 
 Uso:
     .venv/bin/python graficos/graficar.py --resultados resultados --salida informe/figuras
@@ -33,6 +34,8 @@ import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator  # noqa: E402
 
+from valores import generar_valores, leer_csv, num  # noqa: E402  (mismo directorio que este script)
+
 try:
     from zoneinfo import ZoneInfo
 
@@ -50,7 +53,6 @@ ETIQUETAS = {
 }
 COLORES = {"B": "#1f77b4", "BE4": "#d95f02", "BE126": "#1b9e77"}
 MARCADORES = {"B": "o", "BE4": "s", "BE126": "^"}
-ALPHA_ELEGIDO = 0.9  # α usado en el experimento principal (constantes kAlphaBe4/kAlphaBe126 de src/main.cpp)
 
 plt.rcParams.update(
     {
@@ -76,30 +78,6 @@ plt.rcParams.update(
 # ----------------------------------------------------------------------------
 # Lectura y agregación
 # ----------------------------------------------------------------------------
-
-
-def leer_csv(ruta: str) -> list[dict]:
-    """Lee un CSV y convierte a número las columnas que lo son.
-
-    Parámetros:
-        ruta: ruta del archivo CSV.
-    Retorna:
-        lista de filas como diccionarios (int o float si se puede, si no str).
-    """
-    filas = []
-    with open(ruta, newline="", encoding="utf-8") as f:
-        for fila in csv.DictReader(f):
-            convertida = {}
-            for k, v in fila.items():
-                try:
-                    convertida[k] = int(v)
-                except ValueError:
-                    try:
-                        convertida[k] = float(v)
-                    except ValueError:
-                        convertida[k] = v
-            filas.append(convertida)
-    return filas
 
 
 def prom_desv(valores: list[float]) -> tuple[float, float]:
@@ -286,19 +264,6 @@ def escribir_tabla(ruta: str, encabezado: list[str], filas: list[list[str]]) -> 
         w.writerow(encabezado)
         w.writerows(filas)
     print(f"  {ruta}")
-
-
-def num(x: float, decimales: int = 2) -> str:
-    """Formatea un número con coma decimal y espacio duro como separador de miles (estilo español).
-
-    Parámetros:
-        x: número.
-        decimales: cantidad de decimales.
-    Retorna:
-        texto formateado, por ejemplo 1 234,56 (el espacio es U+00A0).
-    """
-    s = f"{x:,.{decimales}f}"
-    return s.replace(",", "\u00a0").replace(".", ",")
 
 
 def coma_decimal(ax, eje: str = "y") -> None:
@@ -586,18 +551,23 @@ def graficos_alpha(resultados: str, salida: str, tipo: str) -> dict | None:
     d.plot(alphas, [r["io_bus"] for r in rs], color=color, marker="o")
     d.set_ylabel("I/Os por búsqueda")
     d.set_title("(d) Búsqueda: I/Os promedio")
+    ruta_elegido = os.path.join(resultados, f"alpha_{tipo}_elegido.csv")
+    elegido = leer_csv(ruta_elegido)[0]["alpha"] if os.path.exists(ruta_elegido) else None
     for ax in (a, b, c, d):
         ax.set_xlabel("α")
         ax.set_xlim(0, 1)
         ax.xaxis.set_major_locator(FixedLocator([0, 0.2, 0.4, 0.6, 0.8, 1.0]))
-        ax.axvline(ALPHA_ELEGIDO, color="gray", linestyle="--", linewidth=0.8)
+        if elegido is not None:
+            ax.axvline(elegido, color="gray", linestyle="--", linewidth=0.8)
         coma_decimal(ax, "xy")
     for ax in (b, d):
         # Escala de ±5 % alrededor de los datos, para que variaciones de 1 % no parezcan grandes.
         ys = ax.get_lines()[0].get_ydata()
         ax.set_ylim(min(ys) * 0.95, max(ys) * 1.05)
-    fig.suptitle(f"{ETIQUETAS[tipo]}, N = $2^{{{int(math.log2(n))}}}$ (línea punteada: α elegido = "
-                 f"{ALPHA_ELEGIDO:g})".replace(".", ","), fontsize=10)
+    titulo = f"{ETIQUETAS[tipo]}, N = $2^{{{int(math.log2(n))}}}$"
+    if elegido is not None:
+        titulo += f" (línea punteada: α elegido = {elegido:g})".replace(".", ",")
+    fig.suptitle(titulo, fontsize=10)
     fig.tight_layout()
     guardar(fig, salida, f"alpha_{tipo}")
 
@@ -635,11 +605,19 @@ def main() -> int:
     FORMATO = args.formato
     os.makedirs(args.salida, exist_ok=True)
     print("Generando figuras y tablas:")
-    graficos_principal(args.resultados, args.salida)
-    grafico_consulta(args.resultados, args.salida, [int(x) for x in args.consulta.split(",") if x],
-                     [int(x) for x in args.consulta_tabla.split(",") if x])
+    fig_consulta = [int(x) for x in args.consulta.split(",") if x]
+    tabla_consulta = [int(x) for x in args.consulta_tabla.split(",") if x]
+    res = graficos_principal(args.resultados, args.salida)
+    grafico_consulta(args.resultados, args.salida, fig_consulta, tabla_consulta)
+    res_alpha = {}
     for tipo in ("BE126", "BE4"):
-        graficos_alpha(args.resultados, args.salida, tipo)
+        r = graficos_alpha(args.resultados, args.salida, tipo)
+        if r is not None:
+            res_alpha[tipo] = r
+    if res is None or len(res_alpha) < 2:
+        print("Faltan resultados del experimento principal o del bonus: no se genera valores.json", file=sys.stderr)
+        return 1
+    generar_valores(args.resultados, args.salida, res, res_alpha, fig_consulta, tabla_consulta)
     return 0
 
 

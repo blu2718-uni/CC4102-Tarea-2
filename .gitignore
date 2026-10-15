@@ -1,9 +1,19 @@
-# Datos del curso (no se entregan) y archivos generados
+# Datos del curso (no se entregan)
 data/
+*.bin
+
+# Todo lo que generan los experimentos y el informe se produce en la máquina que los ejecuta
+resultados/
+informe/figuras/
+informe/informe.pdf
+
+# Compilación y herramientas
 arboles/
 build/
 .venv/
 .herramientas/
 __pycache__/
-*.bin
 *.log
+
+# Enunciado (material del curso)
+/Tarea2_CC4102_*.pdf

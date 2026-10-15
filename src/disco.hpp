@@ -20,6 +20,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "archivo.hpp"
+
 /**
  * @brief Arreglo de nodos en RAM que hace de disco mientras se construye un árbol.
  *
@@ -109,42 +111,22 @@ public:
      *        con una escritura de un bloque (sizeof(Nodo) bytes) por nodo, así que el
      *        nodo i queda en el byte i*sizeof(Nodo).
      *
-     * Después hace fsync, para que los datos estén realmente en el disco antes de
-     * buscar, y pide al sistema operativo que saque el archivo de su caché de
-     * páginas (posix_fadvise), para que las búsquedas lean de verdad del disco.
+     * El archivo se crea con crearArchivoBloques() (en Btrfs queda sin compresión, para
+     * poder leerlo con O_DIRECT) y se cierra con terminarArchivo(): fsync, para que los
+     * datos estén realmente en el disco antes de buscar, y posix_fadvise, para sacarlo de
+     * la caché de páginas y que las búsquedas lean de verdad del disco.
      *
      * @param ruta ruta del archivo de salida; se sobrescribe si existe (entrada).
      * @return cantidad de bytes escritos (= cantidad() * sizeof(Nodo)).
      */
     uint64_t guardar(const std::string& ruta) const {
-        const int fd = ::open(ruta.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) throw std::system_error(errno, std::generic_category(), "no se pudo crear " + ruta);
+        const int fd = crearArchivoBloques(ruta);
         uint64_t total = 0;
         for (int64_t i = 0; i < cantidad_; ++i) {
-            const char* p = reinterpret_cast<const char*>(direccion(static_cast<int32_t>(i)));
-            size_t restante = sizeof(Nodo);
-            while (restante > 0) {  // write puede escribir menos bytes de los pedidos
-                const ssize_t w = ::write(fd, p, restante);
-                if (w < 0) {
-                    if (errno == EINTR) continue;
-                    const int e = errno;
-                    ::close(fd);
-                    throw std::system_error(e, std::generic_category(), "error escribiendo " + ruta);
-                }
-                p += w;
-                restante -= static_cast<size_t>(w);
-                total += static_cast<uint64_t>(w);
-            }
+            escribirTodo(fd, direccion(static_cast<int32_t>(i)), sizeof(Nodo), ruta);
+            total += sizeof(Nodo);
         }
-        if (::fsync(fd) != 0) {
-            const int e = errno;
-            ::close(fd);
-            throw std::system_error(e, std::generic_category(), "error en fsync de " + ruta);
-        }
-#ifdef POSIX_FADV_DONTNEED
-        ::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
-#endif
-        ::close(fd);
+        terminarArchivo(fd, ruta);
         return total;
     }
 

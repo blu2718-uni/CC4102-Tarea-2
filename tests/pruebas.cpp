@@ -426,9 +426,11 @@ void probarUmbralExacto() {
 
 /**
  * @brief Ejecuta todas las pruebas.
+ * @param argc cantidad de argumentos (entrada).
+ * @param argv argv[1], opcional: CSV donde se escribe "verificaciones,fallas" para el informe (entrada).
  * @return 0 si todas pasan, 1 si alguna falla.
  */
-int main() {
+int main(int argc, char** argv) {
     ::mkdir("build", 0755);
     std::printf("Conteo de I/Os en casos pequeños...\n");
     probarConteoIOsB();
@@ -498,5 +500,12 @@ int main() {
     }
 
     std::printf("%d verificaciones, %d fallas\n", gVerificaciones, gFallas);
+    if (argc > 1) {
+        std::FILE* f = std::fopen(argv[1], "w");
+        if (f != nullptr) {
+            std::fprintf(f, "verificaciones,fallas\n%d,%d\n", gVerificaciones, gFallas);
+            std::fclose(f);
+        }
+    }
     return gFallas == 0 ? 0 : 1;
 }

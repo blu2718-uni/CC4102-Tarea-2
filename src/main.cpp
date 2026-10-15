@@ -34,6 +34,7 @@
 #include "arbol_b.hpp"
 #include "arbol_be.hpp"
 #include "datos.hpp"
+#include "medicion.hpp"
 
 namespace {
 
@@ -47,10 +48,15 @@ constexpr int64_t kLlaveMax = 1754006400;   ///< Máximo del rango de l (enuncia
 constexpr int64_t kAnchoRango = 604800;     ///< Ancho de cada búsqueda: una semana en segundos.
 constexpr size_t kParesPorBloque = 1 << 16; ///< Pares que se leen de datos.bin en cada fread.
 
-/// α por defecto de cada árbol Bε, elegidos con el experimento `alpha` (N = 2^24; ver informe):
-/// con α = 0.9 las I/Os de carga quedan a menos de 0.2 % del mínimo y las de búsqueda a menos de 2 %.
-constexpr double kAlphaBe4 = 0.9;
-constexpr double kAlphaBe126 = 0.9;
+/// α que se usa en un árbol Bε si no se indica con --alpha-be4/--alpha-be126 y no existe
+/// resultados/alpha_<tipo>_elegido.csv (el archivo que escribe el comando `alpha`).
+constexpr double kAlphaPorDefecto = 0.9;
+
+/// Regla para elegir α en el bonus: el menor α cuyas I/Os de carga estén a lo más a esta
+/// fracción del mínimo entre los α probados...
+constexpr double kToleranciaCarga = 0.005;
+/// ... y cuyas I/Os promedio de búsqueda estén a lo más a esta fracción del mínimo.
+constexpr double kToleranciaBusqueda = 0.03;
 
 /// @brief Opciones de línea de comandos (ver ayuda()).
 struct Opciones {
@@ -64,8 +70,10 @@ struct Opciones {
     int busquedas = -1;                                   ///< Búsquedas por árbol (-1: 50 o 20 según el comando).
     int repeticiones = 1;                                 ///< Veces que se repite cada construcción y sus búsquedas.
     uint64_t semilla = 20261015;                          ///< Semilla de los rangos aleatorios.
-    double alphaBe4 = kAlphaBe4;                          ///< α del árbol Bε c=4.
-    double alphaBe126 = kAlphaBe126;                      ///< α del árbol Bε c=126.
+    double alphaBe4 = -1;                                 ///< α del árbol Bε c=4 (-1: elegido o por defecto).
+    double alphaBe126 = -1;                               ///< α del árbol Bε c=126 (-1: elegido o por defecto).
+    int mib = 512;                                        ///< MiB del archivo de prueba (latencia).
+    int lecturasLatencia = 3000;                          ///< Lecturas por modo (latencia).
     std::vector<std::string> tipos = {"B", "BE4", "BE126"};  ///< Árboles del experimento principal.
     std::vector<int> guardarConsulta = {16, 20, 26};      ///< Exponentes para los que se guarda la búsqueda 0.
     std::string arbolAlpha = "BE126";                     ///< Árbol del experimento alpha.
@@ -143,7 +151,12 @@ struct MedicionArbol {
     uint64_t escrituras = 0;   ///< Escrituras simuladas durante la inserción.
     EstadisticasArbol est;     ///< Estructura del árbol.
     ContadoresArbol cont;      ///< Contadores de flush/splits.
-    bool directo = false;      ///< Las búsquedas usaron O_DIRECT.
+    bool directo = false;      ///< Las búsquedas leyeron de verdad del disco (O_DIRECT sin problemas).
+    std::string motivo;        ///< Si directo es false, el motivo (ver ArchivoArbol::motivo()).
+    double tCpuInsercion = 0;  ///< Tiempo de CPU del proceso durante las inserciones (s).
+    Interferencia interIns;    ///< Interferencia durante la construcción (lectura de datos + inserciones).
+    Interferencia interBus;    ///< Interferencia durante las búsquedas.
+    int64_t memDisponible = -1;  ///< MiB disponibles en la máquina al empezar la construcción.
     std::vector<MedicionBusqueda> busquedas;  ///< Una entrada por búsqueda.
 };
 
@@ -231,21 +244,25 @@ std::vector<Resumen> fuerzaBruta(const std::string& ruta, uint64_t n, const std:
  * @param ruta       ruta de datos.bin (entrada).
  * @param n          cantidad de pares (entrada).
  * @param tLectura   segundos gastados leyendo datos.bin (salida).
- * @return segundos gastados en las inserciones.
+ * @param tCpu       segundos de CPU del proceso gastados en las inserciones (salida).
+ * @return segundos de reloj gastados en las inserciones.
  */
 template <class Arbol>
-double construir(Arbol& arbol, const std::string& ruta, uint64_t n, double& tLectura) {
+double construir(Arbol& arbol, const std::string& ruta, uint64_t n, double& tLectura, double& tCpu) {
     LectorDatos lector(ruta, n);
     std::vector<Par> bloque;
     double segundos = 0;
     tLectura = 0;
+    tCpu = 0;
     while (true) {
         const auto t0 = Reloj::now();
         const size_t k = lector.siguiente(bloque, kParesPorBloque);
         const auto t1 = Reloj::now();
         tLectura += std::chrono::duration<double>(t1 - t0).count();
         if (k == 0) break;
+        const double c0 = tiempoCpu();
         for (size_t i = 0; i < k; ++i) arbol.insertar(bloque[i]);
+        tCpu += tiempoCpu() - c0;
         segundos += std::chrono::duration<double>(Reloj::now() - t1).count();
     }
     return segundos;
@@ -292,9 +309,12 @@ MedicionArbol medirArbol(const std::string& tipo, double alpha, Fabrica crear, c
     if (alpha > 0) nombre << "_a" << alpha;
     nombre << "_N" << exponente << ".bin";
     const std::string ruta = nombre.str();
+    m.memDisponible = memoriaDisponibleMiB();
     {
         std::unique_ptr<Arbol> arbol = crear();
-        m.tInsercion = construir(*arbol, op.datos, m.n, m.tLecturaDatos);
+        const Muestra antes = tomarMuestra();
+        m.tInsercion = construir(*arbol, op.datos, m.n, m.tLecturaDatos, m.tCpuInsercion);
+        m.interIns = diferencia(antes, tomarMuestra());
         m.lecturas = arbol->disco().lecturas();
         m.escrituras = arbol->disco().escrituras();
         m.est = arbol->estadisticas();
@@ -305,7 +325,9 @@ MedicionArbol medirArbol(const std::string& tipo, double alpha, Fabrica crear, c
     }  // Aquí se destruye el árbol y se libera su RAM antes de buscar.
     ArchivoArbol<typename Arbol::Nodo> archivo(ruta, op.directo);
     m.directo = archivo.directo();
+    m.motivo = archivo.motivo();
     std::vector<Par> resultado;
+    const Muestra antesBusquedas = tomarMuestra();
     for (const Consulta& c : consultas) {
         resultado.clear();
         archivo.reiniciarLecturas();
@@ -319,6 +341,7 @@ MedicionArbol medirArbol(const std::string& tipo, double alpha, Fabrica crear, c
             std::sort(consulta0->begin(), consulta0->end(), CompararLlave{});
         }
     }
+    m.interBus = diferencia(antesBusquedas, tomarMuestra());
     if (!op.conservar) std::remove(ruta.c_str());
     return m;
 }
@@ -366,6 +389,158 @@ double alphaDe(const std::string& tipo, const Opciones& op) {
 }
 
 /**
+ * @brief Lee un CSV simple (sin comillas) completo.
+ * @param ruta archivo CSV (entrada).
+ * @param filas filas como mapas columna -> texto (salida).
+ * @return false si el archivo no existe.
+ */
+bool leerCsv(const std::string& ruta, std::vector<std::vector<std::pair<std::string, std::string>>>& filas) {
+    std::FILE* f = std::fopen(ruta.c_str(), "r");
+    if (f == nullptr) return false;
+    std::vector<std::string> encabezado;
+    char buf[4096];
+    bool primera = true;
+    while (std::fgets(buf, sizeof buf, f) != nullptr) {
+        std::string linea(buf);
+        while (!linea.empty() && (linea.back() == '\n' || linea.back() == '\r')) linea.pop_back();
+        if (linea.empty()) continue;
+        std::vector<std::string> campos;
+        std::stringstream ss(linea);
+        std::string x;
+        while (std::getline(ss, x, ',')) campos.push_back(x);
+        if (!linea.empty() && linea.back() == ',') campos.push_back("");
+        if (primera) {
+            encabezado = campos;
+            primera = false;
+            continue;
+        }
+        std::vector<std::pair<std::string, std::string>> fila;
+        for (size_t i = 0; i < encabezado.size(); ++i) fila.push_back({encabezado[i], i < campos.size() ? campos[i] : ""});
+        filas.push_back(fila);
+    }
+    std::fclose(f);
+    return true;
+}
+
+/**
+ * @brief Busca el valor de una columna en una fila leída con leerCsv().
+ * @param fila fila (entrada).
+ * @param columna nombre de la columna (entrada).
+ * @return texto del campo; lanza una excepción si la columna no existe.
+ */
+const std::string& campo(const std::vector<std::pair<std::string, std::string>>& fila, const std::string& columna) {
+    for (const auto& c : fila) {
+        if (c.first == columna) return c.second;
+    }
+    throw std::runtime_error("falta la columna " + columna);
+}
+
+/**
+ * @brief Lee el α elegido por el experimento bonus para un árbol Bε.
+ * @param dir carpeta de resultados (entrada).
+ * @param tipo BE4 o BE126 (entrada).
+ * @param alpha α elegido (salida).
+ * @return true si existe resultados/alpha_<tipo>_elegido.csv.
+ */
+bool leerAlphaElegido(const std::string& dir, const std::string& tipo, double& alpha) {
+    std::vector<std::vector<std::pair<std::string, std::string>>> filas;
+    if (!leerCsv(dir + "/alpha_" + tipo + "_elegido.csv", filas) || filas.empty()) return false;
+    alpha = std::stod(campo(filas[0], "alpha"));
+    if (!(alpha > 0 && alpha < 1)) throw std::runtime_error("α inválido en alpha_" + tipo + "_elegido.csv");
+    return true;
+}
+
+/**
+ * @brief Completa los α de los Bε que no se dieron por línea de comandos: usa el α elegido
+ *        por el experimento bonus (si ya se ejecutó) o kAlphaPorDefecto, y lo informa.
+ * @param op opciones; se completan alphaBe4 y alphaBe126 (entrada/salida).
+ */
+void resolverAlphas(Opciones& op) {
+    for (auto par : {std::make_pair(std::string("BE4"), &op.alphaBe4), std::make_pair(std::string("BE126"), &op.alphaBe126)}) {
+        if (*par.second > 0) continue;
+        double a;
+        if (leerAlphaElegido(op.resultados, par.first, a)) {
+            *par.second = a;
+            registrar(par.first + ": se usa el α elegido por el experimento bonus, " + std::to_string(a));
+        } else {
+            *par.second = kAlphaPorDefecto;
+            registrar(par.first + ": no existe " + op.resultados + "/alpha_" + par.first +
+                      "_elegido.csv (ejecute primero `make alpha`); se usa α = " + std::to_string(kAlphaPorDefecto));
+        }
+    }
+}
+
+/**
+ * @brief Elige α a partir de los resultados del bonus de un árbol Bε y lo guarda en
+ *        resultados/alpha_<tipo>_elegido.csv.
+ *
+ * Regla: el menor α cuyas I/Os de carga (deterministas) estén a lo más kToleranciaCarga
+ * sobre el mínimo y cuyas I/Os promedio de búsqueda estén a lo más kToleranciaBusqueda
+ * sobre el mínimo. Se usan I/Os y no tiempos porque las I/Os no dependen de la máquina;
+ * entre los α que cumplen, el menor hace menos vaciados (menos CPU).
+ *
+ * @param dir carpeta de resultados (entrada).
+ * @param tipo BE4 o BE126 (entrada).
+ * @return α elegido.
+ */
+double elegirAlpha(const std::string& dir, const std::string& tipo) {
+    std::vector<std::vector<std::pair<std::string, std::string>>> arboles, busquedas;
+    if (!leerCsv(dir + "/alpha_" + tipo + ".csv", arboles) || arboles.empty() ||
+        !leerCsv(dir + "/alpha_" + tipo + "_busquedas.csv", busquedas) || busquedas.empty()) {
+        throw std::runtime_error("faltan los resultados del experimento alpha para " + tipo);
+    }
+    std::vector<double> alphas;
+    std::vector<double> carga, sumaBus, cuentaBus;
+    auto indice = [&](double a) -> size_t {  // posición de α en los vectores (lo agrega si no está)
+        for (size_t i = 0; i < alphas.size(); ++i) {
+            if (std::fabs(alphas[i] - a) < 1e-12) return i;
+        }
+        alphas.push_back(a);
+        carga.push_back(-1);
+        sumaBus.push_back(0);
+        cuentaBus.push_back(0);
+        return alphas.size() - 1;
+    };
+    for (const auto& f : arboles) {
+        const size_t i = indice(std::stod(campo(f, "alpha")));
+        carga[i] = std::stod(campo(f, "ios_insercion")) / std::stod(campo(f, "N"));
+    }
+    for (const auto& f : busquedas) {
+        const size_t i = indice(std::stod(campo(f, "alpha")));
+        sumaBus[i] += std::stod(campo(f, "ios"));
+        cuentaBus[i] += 1;
+    }
+    double minCarga = 1e300, minBus = 1e300;
+    for (size_t i = 0; i < alphas.size(); ++i) {
+        minCarga = std::min(minCarga, carga[i]);
+        minBus = std::min(minBus, sumaBus[i] / cuentaBus[i]);
+    }
+    // Primero se exigen ambas tolerancias; si ningún α las cumple a la vez, manda la carga
+    // (siempre hay al menos un α con la carga mínima).
+    size_t elegido = alphas.size();
+    std::string criterio = "carga_y_busqueda";
+    for (int intento = 0; intento < 2 && elegido == alphas.size(); ++intento) {
+        if (intento == 1) criterio = "solo_carga";
+        for (size_t i = 0; i < alphas.size(); ++i) {
+            const double bus = sumaBus[i] / cuentaBus[i];
+            const bool cumple = carga[i] <= minCarga * (1 + kToleranciaCarga) &&
+                                (intento == 1 || bus <= minBus * (1 + kToleranciaBusqueda));
+            if (cumple && (elegido == alphas.size() || alphas[i] < alphas[elegido])) elegido = i;
+        }
+    }
+    std::FILE* f = std::fopen((dir + "/alpha_" + tipo + "_elegido.csv").c_str(), "w");
+    if (f == nullptr) throw std::runtime_error("no se pudo escribir el α elegido");
+    std::fprintf(f, "tipo,alpha,ios_por_par,ios_busqueda,ios_por_par_min,ios_busqueda_min,tolerancia_carga,"
+                    "tolerancia_busqueda,criterio\n");
+    std::fprintf(f, "%s,%g,%.6f,%.3f,%.6f,%.3f,%g,%g,%s\n", tipo.c_str(), alphas[elegido], carga[elegido],
+                 sumaBus[elegido] / cuentaBus[elegido], minCarga, minBus, kToleranciaCarga, kToleranciaBusqueda,
+                 criterio.c_str());
+    std::fclose(f);
+    registrar(tipo + ": α elegido = " + std::to_string(alphas[elegido]));
+    return alphas[elegido];
+}
+
+/**
  * @brief Calcula el promedio y la desviación estándar muestral.
  * @param v valores (entrada).
  * @param prom promedio (salida).
@@ -389,7 +564,9 @@ const char* kEncabezadoArbol =
     "ios_insercion,nodos,bytes,altura,nodos_internos,hojas,elementos_en_internos,elementos_en_hojas,"
     "vaciados,lotes,elementos_empujados,divisiones_hoja,divisiones_internas,t_escritura_s,busquedas,"
     "t_busqueda_prom_ms,t_busqueda_desv_ms,ios_busqueda_prom,ios_busqueda_desv,resultados_prom,odirect,"
-    "verificado\n";
+    "verificado,t_cpu_insercion_s,cambios_invol_insercion,fallos_mayores_insercion,psi_cpu_insercion_ms,"
+    "psi_mem_insercion_ms,steal_insercion_ms,cambios_invol_busqueda,fallos_mayores_busqueda,psi_cpu_busqueda_ms,"
+    "psi_mem_busqueda_ms,steal_busqueda_ms,mem_disponible_mib,motivo_sin_odirect\n";
 
 /// Encabezado de los CSV con una fila por búsqueda.
 const char* kEncabezadoBusqueda = "tipo,alpha,exponente,N,repeticion,id,l,u,resultados,ios,tiempo_ms,correcta\n";
@@ -415,7 +592,7 @@ bool escribirFilaArbol(std::FILE* f, const MedicionArbol& m) {
     promedioDesv(res, resProm, resDesv);
     std::fprintf(f,
                  "%s,%g,%d,%llu,%d,%.6f,%.6f,%llu,%llu,%llu,%lld,%lld,%d,%lld,%lld,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
-                 "%.6f,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%d,%d\n",
+                 "%.6f,%zu,%.6f,%.6f,%.3f,%.3f,%.3f,%d,%d,%.6f,%lld,%lld,%.3f,%.3f,%.3f,%lld,%lld,%.3f,%.3f,%.3f,%lld,%s\n",
                  m.tipo.c_str(), m.alpha, m.exponente, static_cast<unsigned long long>(m.n), m.repeticion,
                  m.tInsercion,
                  m.tLecturaDatos, static_cast<unsigned long long>(m.lecturas),
@@ -428,7 +605,12 @@ bool escribirFilaArbol(std::FILE* f, const MedicionArbol& m) {
                  static_cast<unsigned long long>(m.cont.elementosEmpujados),
                  static_cast<unsigned long long>(m.cont.divisionesHoja),
                  static_cast<unsigned long long>(m.cont.divisionesInternas), m.tEscritura, m.busquedas.size(), tProm,
-                 tDesv, ioProm, ioDesv, resProm, m.directo ? 1 : 0, ok ? 1 : 0);
+                 tDesv, ioProm, ioDesv, resProm, m.directo ? 1 : 0, ok ? 1 : 0, m.tCpuInsercion,
+                 static_cast<long long>(m.interIns.involuntarios), static_cast<long long>(m.interIns.mayores),
+                 m.interIns.psiCpuMs, m.interIns.psiMemMs, m.interIns.stealMs,
+                 static_cast<long long>(m.interBus.involuntarios), static_cast<long long>(m.interBus.mayores),
+                 m.interBus.psiCpuMs, m.interBus.psiMemMs, m.interBus.stealMs, static_cast<long long>(m.memDisponible),
+                 m.motivo.c_str());
     std::fflush(f);
     return ok;
 }
@@ -510,7 +692,7 @@ std::string describir(const MedicionArbol& m) {
                   static_cast<double>(m.lecturas + m.escrituras) / static_cast<double>(m.n),
                   static_cast<long long>(m.est.nodos), static_cast<double>(m.est.nodos) * 4096.0 / (1 << 20),
                   m.est.altura, ms / k, ios / k, res / k, ok ? "OK" : "ERROR EN BUSQUEDAS",
-                  m.directo ? "" : " (sin O_DIRECT)");
+                  m.directo ? "" : (" (ATENCIÓN: las búsquedas no leyeron directo del disco: " + m.motivo + ")").c_str());
     return buf;
 }
 
@@ -542,7 +724,10 @@ int comandoPrincipal(const Opciones& op) {
         std::vector<Par> consulta0;
         bool consultaGuardada = false;
         for (int rep = 0; rep < op.repeticiones; ++rep) {
-            for (const std::string& tipo : op.tipos) {
+            // El orden de los árboles rota en cada repetición, para que una interferencia
+            // pasajera no caiga siempre sobre el mismo árbol.
+            for (size_t j = 0; j < op.tipos.size(); ++j) {
+                const std::string& tipo = op.tipos[(j + static_cast<size_t>(rep)) % op.tipos.size()];
                 registrar("N=2^" + std::to_string(e) + " rep " + std::to_string(rep) + ": construyendo " + tipo);
                 MedicionArbol m = medirTipo(tipo, alphaDe(tipo, op), op, e, consultas, &esperado,
                                             (guardar && !consultaGuardada) ? &consulta0 : nullptr);
@@ -588,7 +773,8 @@ int comandoAlpha(const Opciones& op) {
     std::FILE* fBusq = abrirCsv(base + "_busquedas.csv", kEncabezadoBusqueda);
     bool todoOk = true;
     for (int rep = 0; rep < op.repeticiones; ++rep) {
-        for (double a : op.alphas) {
+        for (size_t j = 0; j < op.alphas.size(); ++j) {  // el orden de los α también rota
+            const double a = op.alphas[(j + static_cast<size_t>(rep)) % op.alphas.size()];
             registrar("alpha rep " + std::to_string(rep) + ": construyendo " + op.arbolAlpha + " con alpha=" +
                       std::to_string(a));
             MedicionArbol m = medirTipo(op.arbolAlpha, a, op, op.nAlpha, consultas, &esperado, nullptr);
@@ -600,7 +786,112 @@ int comandoAlpha(const Opciones& op) {
     }
     std::fclose(fArboles);
     std::fclose(fBusq);
+    elegirAlpha(op.resultados, op.arbolAlpha);
     return todoOk ? 0 : 2;
+}
+
+/**
+ * @brief Estadísticas de datos.bin para el informe: cantidad de pares, rango de llaves y
+ *        de temperaturas, y llaves repetidas. Escribe resultados/datos.csv.
+ * @param op opciones (datos, resultados) (entrada).
+ * @return 0 al terminar.
+ */
+int comandoDatos(const Opciones& op) {
+    crearCarpeta(op.resultados);
+    const uint64_t n = paresEnArchivo(op.datos);
+    LectorDatos lector(op.datos, n);
+    std::vector<Par> bloque;
+    std::vector<int32_t> llaves;
+    llaves.reserve(static_cast<size_t>(n));
+    int32_t lMin = INT32_MAX, lMax = INT32_MIN;
+    float vMin = 1e30f, vMax = -1e30f;
+    uint64_t noNumericos = 0;
+    while (const size_t k = lector.siguiente(bloque, kParesPorBloque)) {
+        for (size_t i = 0; i < k; ++i) {
+            const Par& p = bloque[i];
+            llaves.push_back(p.llave);
+            lMin = std::min(lMin, p.llave);
+            lMax = std::max(lMax, p.llave);
+            if (std::isnan(p.valor)) {
+                ++noNumericos;
+            } else {
+                vMin = std::min(vMin, p.valor);
+                vMax = std::max(vMax, p.valor);
+            }
+        }
+    }
+    std::sort(llaves.begin(), llaves.end());
+    uint64_t repetidas = 0;  // pares cuya llave ya apareció antes
+    for (size_t i = 1; i < llaves.size(); ++i) repetidas += llaves[i] == llaves[i - 1] ? 1 : 0;
+    std::FILE* f = abrirCsv(op.resultados + "/datos.csv",
+                            "pares,llave_min,llave_max,llaves_repetidas,temp_min,temp_max,temp_no_numericas\n");
+    std::fprintf(f, "%llu,%d,%d,%llu,%.4f,%.4f,%llu\n", static_cast<unsigned long long>(n), lMin, lMax,
+                 static_cast<unsigned long long>(repetidas), static_cast<double>(vMin), static_cast<double>(vMax),
+                 static_cast<unsigned long long>(noNumericos));
+    std::fclose(f);
+    registrar("datos: " + std::to_string(n) + " pares, " + std::to_string(repetidas) + " llaves repetidas");
+    return 0;
+}
+
+/// @brief Bloque de 4096 bytes sin estructura (archivo de prueba de latencia).
+struct Bloque4K {
+    char bytes[4096];  ///< Contenido del bloque.
+};
+
+/**
+ * @brief Mide la latencia de leer bloques de 4 KiB del disco donde se guardan los árboles,
+ *        de la misma forma que las búsquedas (pread a un buffer alineado, O_DIRECT).
+ *
+ * Crea en la carpeta de árboles un archivo de prueba de --mib MiB con datos aleatorios, lo
+ * lee en orden aleatorio y en orden secuencial (--lecturas veces cada uno) y escribe
+ * resultados/latencia.csv. Después borra el archivo.
+ *
+ * @param op opciones (arboles, resultados, mib, lecturasLatencia, directo) (entrada).
+ * @return 0 si las lecturas fueron directas al disco, 3 si no (ver la columna motivo).
+ */
+int comandoLatencia(const Opciones& op) {
+    crearCarpeta(op.arboles);
+    crearCarpeta(op.resultados);
+    const std::string ruta = op.arboles + "/latencia.bin";
+    const int64_t bloques = static_cast<int64_t>(op.mib) * 256;
+    if (bloques < 2 * op.lecturasLatencia) throw std::invalid_argument("--mib demasiado chico para --lecturas");
+    {
+        std::mt19937_64 rng(op.semilla);
+        std::vector<uint64_t> mega((1 << 20) / sizeof(uint64_t));
+        const int fd = crearArchivoBloques(ruta);
+        for (int i = 0; i < op.mib; ++i) {
+            for (uint64_t& x : mega) x = rng();  // datos aleatorios: no se pueden comprimir
+            escribirTodo(fd, mega.data(), mega.size() * sizeof(uint64_t), ruta);
+        }
+        terminarArchivo(fd, ruta);
+    }
+    ArchivoArbol<Bloque4K> archivo(ruta, op.directo);
+    alignas(4096) static Bloque4K destino;
+    std::FILE* f = abrirCsv(op.resultados + "/latencia.csv",
+                            "modo,lecturas,prom_ms,mediana_ms,p90_ms,p99_ms,mib_archivo,odirect,motivo_sin_odirect\n");
+    std::mt19937_64 rng(op.semilla + 7);
+    for (const char* modo : {"aleatoria", "secuencial"}) {
+        std::vector<double> t;
+        const int64_t base = static_cast<int64_t>(rng() % static_cast<uint64_t>(bloques - op.lecturasLatencia));
+        for (int i = 0; i < op.lecturasLatencia; ++i) {
+            const int64_t b = std::strcmp(modo, "aleatoria") == 0 ? static_cast<int64_t>(rng() % static_cast<uint64_t>(bloques))
+                                                                   : base + i;
+            const auto t0 = Reloj::now();
+            archivo.leer(static_cast<int32_t>(b), destino);
+            t.push_back(std::chrono::duration<double, std::milli>(Reloj::now() - t0).count());
+        }
+        std::sort(t.begin(), t.end());
+        double suma = 0;
+        for (double x : t) suma += x;
+        std::fprintf(f, "%s,%d,%.6f,%.6f,%.6f,%.6f,%d,%d,%s\n", modo, op.lecturasLatencia, suma / static_cast<double>(t.size()),
+                     t[t.size() / 2], t[t.size() * 9 / 10], t[t.size() * 99 / 100], op.mib, archivo.directo() ? 1 : 0,
+                     archivo.motivo().c_str());
+        registrar(std::string("latencia ") + modo + ": mediana " + std::to_string(t[t.size() / 2]) + " ms" +
+                  (archivo.directo() ? "" : " (ATENCIÓN: no se leyó directo del disco: " + archivo.motivo() + ")"));
+    }
+    std::fclose(f);
+    std::remove(ruta.c_str());
+    return archivo.directo() ? 0 : 3;
 }
 
 /**
@@ -682,6 +973,9 @@ void ayuda() {
         "  alpha       Bonus: N = 2^24, un árbol Bε con varios α, 20 búsquedas por α.\n"
         "  consulta    Construye un árbol con 2^n pares, lo guarda y busca [l, u].\n"
         "  buscar      Busca [l, u] en un archivo de árbol ya guardado.\n"
+        "  elegir-alpha  Vuelve a elegir α desde resultados/alpha_<tipo>.csv (--arbol).\n"
+        "  datos       Estadísticas de datos.bin para el informe (resultados/datos.csv).\n"
+        "  latencia    Latencia de lecturas de 4 KiB en la carpeta de árboles (resultados/latencia.csv).\n"
         "\n"
         "Opciones generales:\n"
         "  --datos RUTA          datos.bin (por defecto data/datos.bin)\n"
@@ -695,8 +989,8 @@ void ayuda() {
         "principal:\n"
         "  --nmin E --nmax E     exponentes de N (15 y 26)\n"
         "  --tipos B,BE4,BE126   árboles a medir\n"
-        "  --alpha-be4 A         α del árbol Bε c=4\n"
-        "  --alpha-be126 A       α del árbol Bε c=126\n"
+        "  --alpha-be4 A         α del árbol Bε c=4 (por defecto: el elegido por `alpha`, o 0.9)\n"
+        "  --alpha-be126 A       α del árbol Bε c=126 (ídem)\n"
         "  --guardar-consulta E1,E2   exponentes para los que se guarda la búsqueda 0 (16,20,26)\n"
         "alpha:\n"
         "  --arbol BE4|BE126     árbol a estudiar (BE126)\n"
@@ -708,7 +1002,10 @@ void ayuda() {
         "  --alpha A             (consulta) α para Bε\n"
         "  --archivo RUTA        (buscar) archivo del árbol\n"
         "  --l L --u U           rango de llaves (tiempo Unix)\n"
-        "  --salida RUTA         CSV de salida (por defecto la salida estándar)\n",
+        "  --salida RUTA         CSV de salida (por defecto la salida estándar)\n"
+        "latencia:\n"
+        "  --mib M               tamaño del archivo de prueba en MiB (512)\n"
+        "  --lecturas K          lecturas por modo (3000)\n",
         stderr);
 }
 
@@ -752,6 +1049,8 @@ Opciones parsear(int argc, char** argv) {
         else if (a == "--n") op.nAlpha = std::stoi(valor());
         else if (a == "--busquedas") op.busquedas = std::stoi(valor());
         else if (a == "--repeticiones") op.repeticiones = std::stoi(valor());
+        else if (a == "--mib") op.mib = std::stoi(valor());
+        else if (a == "--lecturas") op.lecturasLatencia = std::stoi(valor());
         else if (a == "--semilla") op.semilla = std::stoull(valor());
         else if (a == "--alpha-be4") op.alphaBe4 = std::stod(valor());
         else if (a == "--alpha-be126") op.alphaBe126 = std::stod(valor());
@@ -790,11 +1089,18 @@ Opciones parsear(int argc, char** argv) {
  */
 int main(int argc, char** argv) {
     try {
-        const Opciones op = parsear(argc, argv);
+        Opciones op = parsear(argc, argv);
+        if (op.comando == "principal" || op.comando == "consulta") resolverAlphas(op);
         if (op.comando == "principal") return comandoPrincipal(op);
         if (op.comando == "alpha") return comandoAlpha(op);
         if (op.comando == "consulta") return comandoConsulta(op);
         if (op.comando == "buscar") return comandoBuscar(op);
+        if (op.comando == "elegir-alpha") {
+            elegirAlpha(op.resultados, op.arbolAlpha);
+            return 0;
+        }
+        if (op.comando == "datos") return comandoDatos(op);
+        if (op.comando == "latencia") return comandoLatencia(op);
         if (op.comando == "ayuda" || op.comando == "--help" || op.comando == "-h") {
             ayuda();
             return 0;
