@@ -85,9 +85,13 @@ $(VENV)/.instalado: graficos/requirements.txt
 	rm -rf $(VENV)
 	if $(PYTHON) -m venv $(VENV); then \
 		$(VENV)/bin/python -m pip install -r graficos/requirements.txt; \
-	else \
+	elif command -v uv >/dev/null; then \
 		rm -rf $(VENV) && uv venv --python $(PYTHON) $(VENV) && \
 		uv pip install --python $(VENV)/bin/python -r graficos/requirements.txt; \
+	else \
+		rm -rf $(VENV); \
+		echo "No se pudo crear el entorno de Python. En Debian/Ubuntu: sudo apt install python3-venv" >&2; \
+		exit 1; \
 	fi
 	touch $@
 

@@ -16,11 +16,23 @@ El repositorio tiene dos partes independientes:
 - **C++** (`src/`, `tests/`): árboles, disco simulado, experimentos. Genera CSV en `resultados/`.
 - **Python** (`graficos/`): solo lee esos CSV y genera figuras, tablas y `valores.json` en `informe/figuras/`.
 
-## Inicio rápido (Fedora)
+## Inicio rápido
+
+Funciona en cualquier Linux x86-64. Primero se instalan las dependencias según la
+distribución:
 
 ```sh
-sudo dnf install gcc-c++ make python3 curl tar xz   # dependencias
-git clone git@github.com:blu2718-uni/CC4102-Tarea-2.git
+# Fedora
+sudo dnf install gcc-c++ make python3 curl tar xz git
+
+# Debian / Ubuntu (python3-venv es necesario: Debian no trae venv con python3)
+sudo apt install g++ make python3 python3-venv curl xz-utils git
+```
+
+Después, en cualquier distribución:
+
+```sh
+git clone git@github.com:blu2718-uni/CC4102-Tarea-2.git   # o con https://github.com/...
 cd CC4102-Tarea-2
 make descargar-datos     # data/datos.bin (512 MiB), verifica el sha256
 make todo                # pruebas, entorno, experimentos, gráficos e informe
@@ -28,6 +40,10 @@ make todo                # pruebas, entorno, experimentos, gráficos e informe
 
 El resultado es `informe/informe.pdf`. Antes de `make todo`, ver
 [Condiciones para medir](#condiciones-para-medir).
+
+En otras distribuciones basta con instalar los equivalentes: un compilador de C++
+con C++17 (`g++`), `make`, Python 3 con el módulo `venv`, `curl`, `tar` con soporte
+`xz` y `git`.
 
 ## Estructura
 
@@ -60,7 +76,7 @@ Se generan (y git los ignora): `data/` (datos.bin), `build/`, `arboles/`
 | Para | Necesita |
 |---|---|
 | Programa C++ | Linux x86-64, `g++` con C++17, `make` |
-| Gráficos | Python ≥ 3.10 con `venv` (en Fedora viene incluido) |
+| Gráficos | Python ≥ 3.10 con `venv` (Fedora lo trae; en Debian/Ubuntu es el paquete `python3-venv`). Si `venv` no está, `make graficos` intenta con [`uv`](https://docs.astral.sh/uv/). `requirements.txt` fija un juego de versiones para Python 3.10–3.11 (Ubuntu 22.04, Debian 12) y otro para 3.12 o más nuevo; ambos generan los mismos resultados |
 | Informe | Typst 0.15.1; si no está en el PATH, `make informe` descarga ese binario en `.herramientas/` y verifica su sha256 |
 
 Memoria y disco: el experimento con N = 2^26 necesita unos 1,3 GiB de RAM libre
@@ -70,13 +86,19 @@ para el archivo temporal del árbol. `datos.bin` ocupa 512 MiB.
 ### Disco y O_DIRECT
 
 Las búsquedas leen los nodos con `O_DIRECT`, para medir accesos reales al disco y
-no a la caché del sistema operativo. La carpeta `arboles/` debe estar en un disco:
+no a la caché del sistema operativo. La carpeta `arboles/` (dentro del repositorio)
+debe estar en un disco:
 
-- **Btrfs (Fedora por defecto):** Fedora monta Btrfs con compresión, y Btrfs no
-  lee con `O_DIRECT` los bloques comprimidos. El programa crea los archivos de los
-  árboles con el atributo NOCOW (como `chattr +C`), que desactiva la compresión, y
-  verifica con FIEMAP que ningún bloque quedó comprimido. No hay que hacer nada.
-- **No usar tmpfs** (por ejemplo `/tmp` en Fedora): el archivo estaría en RAM.
+- **ext4 o xfs** (Debian y Ubuntu por defecto): funcionan sin hacer nada.
+- **Btrfs** (Fedora por defecto, también openSUSE): Fedora monta Btrfs con
+  compresión, y Btrfs no lee con `O_DIRECT` los bloques comprimidos. El programa
+  crea los archivos de los árboles con el atributo NOCOW (como `chattr +C`), que
+  desactiva la compresión, y verifica con FIEMAP que ningún bloque quedó
+  comprimido. No hay que hacer nada.
+- **No usar tmpfs:** no clonar el repositorio en `/tmp` (en Fedora y en Debian 13
+  `/tmp` está en RAM) ni en otra carpeta en RAM.
+- **WSL2:** clonar el repositorio dentro del sistema de archivos de Linux (por
+  ejemplo, en `~`), no en `/mnt/c/...`.
 
 Si la lectura directa no se puede usar, el programa lo avisa en la terminal y lo
 registra (columnas `odirect = 0` y `motivo_sin_odirect`), y el informe lo menciona.
@@ -90,8 +112,11 @@ alturas no. Para que los tiempos sean confiables:
 - Cerrar todo lo demás (navegador, IDE, sincronización de archivos) y no usar el
   equipo mientras corre `make todo`.
 - Notebook: enchufado.
-- Opcional, con sudo: `sudo dnf install kernel-tools` y
-  `sudo cpupower frequency-set -g performance`.
+- Opcional, con sudo: fijar la CPU en máxima frecuencia con
+  `sudo cpupower frequency-set -g performance`. `cpupower` viene en el paquete
+  `kernel-tools` (Fedora), `linux-cpupower` (Debian) o
+  `linux-tools-common` y `linux-tools-$(uname -r)` (Ubuntu). En notebooks también
+  sirve elegir el perfil de energía "Rendimiento" del sistema.
 - No correr dos experimentos a la vez: `make todo` los ejecuta en orden, uno tras otro.
 
 El programa registra, para cada construcción y sus búsquedas, el tiempo de CPU,
