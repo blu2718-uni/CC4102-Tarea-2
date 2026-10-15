@@ -1,0 +1,9 @@
+# Datos del curso (no se entregan) y archivos generados
+data/
+arboles/
+build/
+.venv/
+.herramientas/
+__pycache__/
+*.bin
+*.log
