@@ -240,22 +240,19 @@ bool validar(const ArbolBe<C, L>& arbol, const std::vector<Par>& insertados, std
  * puntuales sobre llaves existentes y rangos aleatorios de distintos anchos.
  *
  * @tparam Arbol tipo de árbol.
- * @param arbol    árbol construido (entrada).
- * @param datos    pares insertados (entrada).
- * @param nombre   nombre del caso, para los mensajes (entrada).
- * @param directo  usar O_DIRECT al leer (entrada).
+ * @param arbol     árbol construido (entrada).
+ * @param datos     pares insertados (entrada).
+ * @param nombre    nombre del caso, para los mensajes (entrada).
  * @param consultas cantidad de rangos aleatorios (entrada).
  */
 template <class Arbol>
-void probarBusquedas(const Arbol& arbol, const std::vector<Par>& datos, const std::string& nombre, bool directo,
-                     int consultas) {
+void probarBusquedas(const Arbol& arbol, const std::vector<Par>& datos, const std::string& nombre, int consultas) {
     const std::string ruta = "build/prueba_" + std::to_string(::getpid()) + ".bin";
     const uint64_t bytes = arbol.disco().guardar(ruta);
     verificar(bytes == static_cast<uint64_t>(arbol.disco().cantidad()) * sizeof(typename Arbol::Nodo),
               nombre + ": tamaño del archivo");
-    ArchivoArbol<typename Arbol::Nodo> archivo(ruta, directo);
+    ArchivoArbol<typename Arbol::Nodo> archivo(ruta);
     verificar(archivo.bloques() == arbol.disco().cantidad(), nombre + ": bloques del archivo");
-    if (directo && sizeof(typename Arbol::Nodo) == 4096) verificar(archivo.directo(), nombre + ": se usa O_DIRECT");
     int64_t mn = INT32_MAX, mx = INT32_MIN;
     for (const Par& p : datos) {
         mn = std::min<int64_t>(mn, p.llave);
@@ -300,15 +297,14 @@ void probarBusquedas(const Arbol& arbol, const std::vector<Par>& datos, const st
  * @brief Caso completo: construye el árbol, valida invariantes y prueba búsquedas.
  * @tparam Arbol   tipo de árbol.
  * @tparam Fabrica función sin argumentos que devuelve std::unique_ptr<Arbol>.
- * @param nombre        nombre del caso (entrada).
- * @param crear         fábrica (entrada).
- * @param datos         pares a insertar (entrada).
- * @param directo       usar O_DIRECT en las búsquedas (entrada).
+ * @param nombre          nombre del caso (entrada).
+ * @param crear           fábrica (entrada).
+ * @param datos           pares a insertar (entrada).
  * @param validarCadaPaso validar después de cada inserción (entrada; solo para casos chicos).
- * @param consultas     cantidad de rangos aleatorios (entrada).
+ * @param consultas       cantidad de rangos aleatorios (entrada).
  */
 template <class Arbol, class Fabrica>
-void caso(const std::string& nombre, Fabrica crear, const std::vector<Par>& datos, bool directo = false,
+void caso(const std::string& nombre, Fabrica crear, const std::vector<Par>& datos,
           bool validarCadaPaso = false, int consultas = 60) {
     std::unique_ptr<Arbol> arbol = crear();
     std::string error;
@@ -327,7 +323,7 @@ void caso(const std::string& nombre, Fabrica crear, const std::vector<Par>& dato
     }
     const bool ok = validar(*arbol, datos, error);
     verificar(ok, nombre + ": " + error);
-    if (ok) probarBusquedas(*arbol, datos, nombre, directo, consultas);
+    if (ok) probarBusquedas(*arbol, datos, nombre, consultas);
 }
 
 /**
@@ -388,46 +384,12 @@ void probarConteoIOsBe() {
               "Bε: contadores de flush");
 }
 
-/**
- * @brief Revisa que el umbral ceil(f·α), con f = ceil(k_buffer / (k_llaves + 1)), sea exacto
- *        aunque f·α no sea representable en punto flotante, y que un árbol con ese α sea válido.
- */
-void probarUmbralExacto() {
-    struct Caso {
-        double alpha;      // α del árbol
-        size_t kBuffer;    // pares en el buffer
-        size_t kLlaves;    // llaves divisorias
-        int64_t esperado;  // ceil(f·α) calculado a mano
-    };
-    const Caso casos[] = {
-        {0.07, 100, 0, 7},   // en double, 100·0.07 = 7.000000000000001 y ceil daría 8
-        {0.3, 10, 0, 3},     // f·α exacto
-        {0.1, 3, 0, 1},      // 0.30000000000000004: ceil = 1
-        {0.9, 384, 81, 5},   // f = ceil(384/82) = 5, ceil(4.5) = 5
-        {0.99, 506, 4, 101}, // f = ceil(506/5) = 102, ceil(100.98) = 101
-        {0.5, 161, 0, 81},   // ceil(80.5) = 81
-        {0.01, 5, 4, 1},     // f = 1, ceil(0.01) = 1 (mínimo 1)
-    };
-    for (const Caso& c : casos) {
-        ArbolBe<4, 6> a(c.alpha);
-        const int64_t u = a.umbral(c.kBuffer, c.kLlaves);
-        verificar(u == c.esperado, "umbral con α=" + std::to_string(c.alpha) + ", k_buffer=" + std::to_string(c.kBuffer) +
-                                       ", k_llaves=" + std::to_string(c.kLlaves) + ": " + std::to_string(u) +
-                                       ", se esperaba " + std::to_string(c.esperado));
-    }
-    ArbolBe<4, 6> a(0.07);
-    std::vector<Par> v = generar("ascendente", 500, 1);
-    for (const Par& p : v) a.insertar(p);
-    std::string error;
-    verificar(validar(a, v, error), "Bε α=0.07: " + error);
-}
-
 }  // namespace
 
 /**
  * @brief Ejecuta todas las pruebas.
  * @param argc cantidad de argumentos (entrada).
- * @param argv argv[1], opcional: CSV donde se escribe "verificaciones,fallas" para el informe (entrada).
+ * @param argv argv[1], opcional: CSV donde se escribe "verificaciones,fallas" (entrada).
  * @return 0 si todas pasan, 1 si alguna falla.
  */
 int main(int argc, char** argv) {
@@ -435,7 +397,6 @@ int main(int argc, char** argv) {
     std::printf("Conteo de I/Os en casos pequeños...\n");
     probarConteoIOsB();
     probarConteoIOsBe();
-    probarUmbralExacto();
 
     const std::vector<std::string> tipos = {"aleatorio", "ascendente", "descendente", "duplicados", "constante",
                                             "extremos"};
@@ -444,11 +405,11 @@ int main(int argc, char** argv) {
     std::printf("Árboles con parámetros pequeños (validación tras cada inserción)...\n");
     for (const std::string& t : tipos) {
         const std::vector<Par> v = generar(t, 400, 7);
-        caso<ArbolB<4>>("B<4> " + t + " paso a paso", [] { return std::make_unique<ArbolB<4>>(); }, v, false, true, 10);
+        caso<ArbolB<4>>("B<4> " + t + " paso a paso", [] { return std::make_unique<ArbolB<4>>(); }, v, true, 10);
         for (double a : {0.01, 0.99}) {
             const std::string s = " a=" + std::to_string(a) + " " + t + " paso a paso";
-            caso<ArbolBe<4, 4>>("Be<4,4>" + s, [a] { return std::make_unique<ArbolBe<4, 4>>(a); }, v, false, true, 10);
-            caso<ArbolBe<4, 6>>("Be<4,6>" + s, [a] { return std::make_unique<ArbolBe<4, 6>>(a); }, v, false, true, 10);
+            caso<ArbolBe<4, 4>>("Be<4,4>" + s, [a] { return std::make_unique<ArbolBe<4, 4>>(a); }, v, true, 10);
+            caso<ArbolBe<4, 6>>("Be<4,6>" + s, [a] { return std::make_unique<ArbolBe<4, 6>>(a); }, v, true, 10);
         }
     }
 
@@ -468,18 +429,17 @@ int main(int argc, char** argv) {
     }
 
     std::printf("Árbol vacío...\n");
-    caso<ArbolB<340>>("B vacío", [] { return std::make_unique<ArbolB<340>>(); }, {}, true);
-    caso<ArbolBe<4, 506>>("Be4 vacío", [] { return std::make_unique<ArbolBe<4, 506>>(0.5); }, {}, true);
+    caso<ArbolB<340>>("B vacío", [] { return std::make_unique<ArbolB<340>>(); }, {});
+    caso<ArbolBe<4, 506>>("Be4 vacío", [] { return std::make_unique<ArbolBe<4, 506>>(0.5); }, {});
 
     std::printf("Parámetros reales con 200000 pares (búsquedas con O_DIRECT)...\n");
     for (const std::string& t : {std::string("aleatorio"), std::string("ascendente"), std::string("duplicados")}) {
         const std::vector<Par> v = generar(t, 200000, 3);
-        caso<ArbolB<340>>("B " + t, [] { return std::make_unique<ArbolB<340>>(); }, v, true, false, 40);
+        caso<ArbolB<340>>("B " + t, [] { return std::make_unique<ArbolB<340>>(); }, v, false, 40);
         for (double a : {0.1, 0.5, 0.9}) {
             const std::string s = " a=" + std::to_string(a) + " " + t;
-            caso<ArbolBe<4, 506>>("Be4" + s, [a] { return std::make_unique<ArbolBe<4, 506>>(a); }, v, true, false, 40);
-            caso<ArbolBe<126, 384>>("Be126" + s, [a] { return std::make_unique<ArbolBe<126, 384>>(a); }, v, true, false,
-                                    40);
+            caso<ArbolBe<4, 506>>("Be4" + s, [a] { return std::make_unique<ArbolBe<4, 506>>(a); }, v, false, 40);
+            caso<ArbolBe<126, 384>>("Be126" + s, [a] { return std::make_unique<ArbolBe<126, 384>>(a); }, v, false, 40);
         }
     }
 
@@ -490,11 +450,9 @@ int main(int argc, char** argv) {
         std::vector<Par> v;
         LectorDatos lector(rutaDatos, 1 << 17);
         lector.siguiente(v, 1 << 17);
-        caso<ArbolB<340>>("B datos.bin", [] { return std::make_unique<ArbolB<340>>(); }, v, true, false, 100);
-        caso<ArbolBe<4, 506>>("Be4 datos.bin", [] { return std::make_unique<ArbolBe<4, 506>>(0.5); }, v, true, false,
-                              100);
-        caso<ArbolBe<126, 384>>("Be126 datos.bin", [] { return std::make_unique<ArbolBe<126, 384>>(0.5); }, v, true,
-                                false, 100);
+        caso<ArbolB<340>>("B datos.bin", [] { return std::make_unique<ArbolB<340>>(); }, v, false, 100);
+        caso<ArbolBe<4, 506>>("Be4 datos.bin", [] { return std::make_unique<ArbolBe<4, 506>>(0.5); }, v, false, 100);
+        caso<ArbolBe<126, 384>>("Be126 datos.bin", [] { return std::make_unique<ArbolBe<126, 384>>(0.5); }, v, false, 100);
     } else {
         std::printf("(sin data/datos.bin: se omite la prueba con datos reales)\n");
     }

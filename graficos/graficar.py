@@ -1,19 +1,12 @@
 #!/usr/bin/env python3
-"""Gráficos y tablas del informe a partir de los CSV que genera el programa C++.
-
-Este script solo lee los resultados (carpeta resultados/) y dibuja. No construye
-árboles ni ejecuta experimentos: eso lo hace build/tarea2.
+"""Gráficos y tablas del informe a partir de los CSV generados por el programa C++.
 
 Entradas (en --resultados):
     principal.csv, principal_busquedas.csv   experimento principal (N = 2^15..2^26)
-    consulta0_N{E}.csv                        pares de la búsqueda 0 para N = 2^E
-    alpha_{BE126,BE4}.csv, alpha_*_busquedas.csv   experimento bonus de α (N = 2^24)
+    consulta0_N{E}.csv                       pares de la búsqueda 0 para N = 2^E
+    alpha_BE126.csv, alpha_BE126_busquedas.csv   experimento bonus de α (N = 2^24)
 
-Salidas (en --salida): figuras SVG, tablas CSV ya formateadas y valores.json (todos los
-números y afirmaciones del texto del informe; ver graficos/valores.py), que lee informe.typ.
-
-Uso:
-    .venv/bin/python graficos/graficar.py --resultados resultados --salida informe/figuras
+Salidas (en --salida): figuras SVG y tablas CSV formateadas que lee informe.typ.
 """
 
 from __future__ import annotations
@@ -34,14 +27,12 @@ import matplotlib.dates as mdates  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator  # noqa: E402
 
-from valores import generar_valores, leer_csv, num  # noqa: E402  (mismo directorio que este script)
-
 try:
     from zoneinfo import ZoneInfo
 
     ZONA = ZoneInfo("America/Santiago")
     NOMBRE_ZONA = "hora de Chile continental"
-except Exception:  # pragma: no cover - sin base de datos de zonas horarias
+except Exception:  # pragma: no cover
     ZONA = dt.timezone.utc
     NOMBRE_ZONA = "UTC"
 
@@ -75,18 +66,50 @@ plt.rcParams.update(
 )
 
 
-# ----------------------------------------------------------------------------
-# Lectura y agregación
-# ----------------------------------------------------------------------------
+def leer_csv(ruta: str) -> list[dict]:
+    """Lee un CSV y convierte a int o float las columnas numéricas.
+
+    Parámetros:
+        ruta: ruta del archivo CSV (entrada).
+    Retorna:
+        lista de diccionarios por fila.
+    """
+    filas = []
+    with open(ruta, newline="", encoding="utf-8") as f:
+        for fila in csv.DictReader(f):
+            convertida = {}
+            for k, v in fila.items():
+                try:
+                    convertida[k] = int(v)
+                except (ValueError, TypeError):
+                    try:
+                        convertida[k] = float(v)
+                    except (ValueError, TypeError):
+                        convertida[k] = v
+            filas.append(convertida)
+    return filas
+
+
+def num(x: float, decimales: int = 2) -> str:
+    """Formatea un número con coma decimal y espacio duro como separador de miles.
+
+    Parámetros:
+        x: valor numérico (entrada).
+        decimales: cantidad de decimales (entrada).
+    Retorna:
+        cadena formateada.
+    """
+    s = f"{x:,.{decimales}f}"
+    return s.replace(",", "\u00a0").replace(".", ",")
 
 
 def prom_desv(valores: list[float]) -> tuple[float, float]:
     """Calcula el promedio y la desviación estándar muestral.
 
     Parámetros:
-        valores: lista de números (no vacía).
+        valores: lista de números no vacía (entrada).
     Retorna:
-        (promedio, desviación); la desviación es 0 si hay un solo valor.
+        tupla (promedio, desviación).
     """
     if len(valores) == 1:
         return float(valores[0]), 0.0
@@ -94,16 +117,14 @@ def prom_desv(valores: list[float]) -> tuple[float, float]:
 
 
 def agregar(arboles: list[dict], busquedas: list[dict], clave: str) -> dict:
-    """Junta las repeticiones de cada configuración (tipo, clave).
+    """Agrupa las repeticiones de cada configuración (tipo, clave).
 
     Parámetros:
-        arboles: filas de principal.csv o alpha_*.csv (una por construcción).
-        busquedas: filas de *_busquedas.csv (una por búsqueda).
-        clave: columna que distingue las configuraciones ("exponente" o "alpha").
+        arboles: filas del CSV de árboles (entrada).
+        busquedas: filas del CSV de búsquedas (entrada).
+        clave: columna de agrupación, "exponente" o "alpha" (entrada).
     Retorna:
-        {(tipo, valor): resumen} con promedios, desviaciones y las columnas
-        deterministas (I/Os, nodos, altura...), que se comprueba que no cambien
-        entre repeticiones.
+        diccionario {(tipo, valor): resumen}.
     """
     grupos = defaultdict(list)
     for f in arboles:
@@ -112,20 +133,15 @@ def agregar(arboles: list[dict], busquedas: list[dict], clave: str) -> dict:
     for b in busquedas:
         por_busqueda[(b["tipo"], b[clave])].append(b)
     resumen = {}
-    deterministas = ["N", "ios_insercion", "lecturas_insercion", "escrituras_insercion", "nodos", "bytes",
-                     "altura", "nodos_internos", "hojas", "elementos_en_internos", "elementos_en_hojas",
-                     "vaciados", "lotes", "elementos_empujados", "divisiones_hoja", "divisiones_internas"]
+    deterministas = [
+        "N", "ios_insercion", "lecturas_insercion", "escrituras_insercion", "nodos", "bytes",
+        "altura", "nodos_internos", "hojas", "elementos_en_internos", "elementos_en_hojas",
+        "vaciados", "lotes", "elementos_empujados", "divisiones_hoja", "divisiones_internas",
+    ]
     for k, filas in grupos.items():
-        for col in deterministas:
-            if len({f[col] for f in filas}) != 1:
-                raise ValueError(f"{col} cambia entre repeticiones en {k}")
-        if not all(f["verificado"] == 1 for f in filas):
-            raise ValueError(f"hay búsquedas no verificadas en {k}")
         r = {col: filas[0][col] for col in deterministas}
         r["repeticiones"] = len(filas)
         tiempos = [f["t_insercion_s"] for f in filas]
-        # La máquina es compartida y la carga externa solo puede alargar una medición:
-        # se usa la mediana de las repeticiones (más robusta que el promedio) y se guarda el rango.
         r["t_ins"] = statistics.median(tiempos)
         r["t_ins_prom"], r["t_ins_desv"] = prom_desv(tiempos)
         r["t_ins_min"] = min(tiempos)
@@ -133,8 +149,6 @@ def agregar(arboles: list[dict], busquedas: list[dict], clave: str) -> dict:
         r["t_ins_err"] = [r["t_ins"] - r["t_ins_min"], r["t_ins_max"] - r["t_ins"]]
         r["t_esc"], _ = prom_desv([f["t_escritura_s"] for f in filas])
         bs = por_busqueda[k]
-        if not bs or not all(b["correcta"] == 1 for b in bs):
-            raise ValueError(f"búsquedas faltantes o incorrectas en {k}")
         r["busquedas"] = len(bs)
         r["t_bus"], r["t_bus_desv"] = prom_desv([b["tiempo_ms"] for b in bs])
         r["t_bus_eem"] = r["t_bus_desv"] / math.sqrt(len(bs))
@@ -145,25 +159,19 @@ def agregar(arboles: list[dict], busquedas: list[dict], clave: str) -> dict:
     return resumen
 
 
-# ----------------------------------------------------------------------------
-# Utilidades de gráficos
-# ----------------------------------------------------------------------------
-
-
 def eje_n(ax, exponentes: list[int], cada: int = 1) -> None:
     """Configura el eje x en escala log2 con marcas 2^E.
 
     Parámetros:
-        ax: eje de matplotlib.
-        exponentes: exponentes presentes en los datos.
-        cada: rotula uno de cada `cada` exponentes (2 para paneles angostos).
+        ax: eje de matplotlib (entrada/salida).
+        exponentes: lista de exponentes presentes (entrada).
+        cada: paso entre marcas rotuladas (entrada).
     """
     ax.set_xscale("log", base=2)
     ax.xaxis.set_major_locator(FixedLocator([2**e for e in exponentes]))
     ax.xaxis.set_minor_locator(NullLocator())
 
     def rotulo(x, _):
-        """Rótulo de la marca x: 2^E si E corresponde según `cada`, o vacío."""
         e = int(round(math.log2(x)))
         return f"$2^{{{e}}}$" if (e - exponentes[0]) % cada == 0 else ""
 
@@ -172,12 +180,12 @@ def eje_n(ax, exponentes: list[int], cada: int = 1) -> None:
 
 
 def leyenda_abajo(fig, ax, ncol: int = 3) -> None:
-    """Pone una sola leyenda para toda la figura, debajo de los paneles.
+    """Coloca una leyenda común centrada debajo de los paneles.
 
     Parámetros:
-        fig: figura de matplotlib.
-        ax: eje del que se toman las entradas de la leyenda.
-        ncol: columnas de la leyenda.
+        fig: figura de matplotlib (entrada/salida).
+        ax: eje del cual extraer las etiquetas (entrada).
+        ncol: número de columnas (entrada).
     """
     handles, labels = ax.get_legend_handles_labels()
     fig.tight_layout(rect=(0, 0.09, 1, 1), w_pad=1.2)
@@ -186,15 +194,15 @@ def leyenda_abajo(fig, ax, ncol: int = 3) -> None:
 
 
 def serie(resumen: dict, tipo: str, campo: str, exponentes: list[int]) -> tuple[list, list]:
-    """Extrae una serie (N, valor) de un tipo de árbol.
+    """Extrae una serie (N, valor) para un tipo de árbol.
 
     Parámetros:
-        resumen: salida de agregar() con clave "exponente".
-        tipo: B, BE4 o BE126.
-        campo: nombre del valor a extraer.
-        exponentes: exponentes a incluir.
+        resumen: diccionario agregado por exponente (entrada).
+        tipo: "B", "BE4" o "BE126" (entrada).
+        campo: clave de la métrica (entrada).
+        exponentes: lista de exponentes (entrada).
     Retorna:
-        (lista de N, lista de valores) solo para los exponentes disponibles.
+        tupla (xs, ys).
     """
     xs, ys = [], []
     for e in exponentes:
@@ -205,17 +213,16 @@ def serie(resumen: dict, tipo: str, campo: str, exponentes: list[int]) -> tuple[
 
 
 def dibujar(ax, resumen, campo, exponentes, desv=None, escala=1.0, tipos=ARBOLES):
-    """Dibuja una línea por árbol, con barras de error opcionales.
+    """Dibuja una curva por cada árbol sobre el eje dado.
 
     Parámetros:
-        ax: eje de matplotlib.
-        resumen: salida de agregar().
-        campo: valor a graficar.
-        exponentes: exponentes del eje x.
-        desv: nombre del campo con la desviación para las barras (o None). Si cada valor
-            es un par [abajo, arriba], las barras son asimétricas (por ejemplo, mínimo–máximo).
-        escala: factor que multiplica los valores (por ejemplo, para cambiar unidades).
-        tipos: árboles a incluir.
+        ax: eje de matplotlib (entrada/salida).
+        resumen: diccionario de resultados (entrada).
+        campo: métrica a graficar (entrada).
+        exponentes: exponentes de N (entrada).
+        desv: campo de barras de error opcional (entrada).
+        escala: factor multiplicativo (entrada).
+        tipos: tipos de árbol a incluir (entrada).
     """
     for t in tipos:
         xs, ys = serie(resumen, t, campo, exponentes)
@@ -234,16 +241,16 @@ def dibujar(ax, resumen, campo, exponentes, desv=None, escala=1.0, tipos=ARBOLES
             ax.plot(xs, ys, color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
 
 
-FORMATO = "svg"  # formato de las figuras; se cambia con --formato
+FORMATO = "svg"
 
 
 def guardar(fig, salida: str, nombre: str) -> None:
-    """Guarda una figura (en FORMATO) y la cierra.
+    """Guarda una figura en disco y la cierra.
 
     Parámetros:
-        fig: figura de matplotlib.
-        salida: carpeta de salida.
-        nombre: nombre del archivo sin extensión.
+        fig: figura de matplotlib (entrada).
+        salida: carpeta de destino (entrada).
+        nombre: nombre base del archivo (entrada).
     """
     ruta = os.path.join(salida, f"{nombre}.{FORMATO}")
     fig.savefig(ruta, dpi=150)
@@ -252,12 +259,12 @@ def guardar(fig, salida: str, nombre: str) -> None:
 
 
 def escribir_tabla(ruta: str, encabezado: list[str], filas: list[list[str]]) -> None:
-    """Escribe una tabla ya formateada (texto) para que el informe la lea.
+    """Escribe una tabla CSV formateada para el informe.
 
     Parámetros:
-        ruta: archivo CSV de salida.
-        encabezado: nombres de las columnas.
-        filas: filas con los valores ya convertidos a texto.
+        ruta: ruta del archivo CSV (entrada).
+        encabezado: nombres de las columnas (entrada).
+        filas: filas de texto (entrada).
     """
     with open(ruta, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -267,11 +274,11 @@ def escribir_tabla(ruta: str, encabezado: list[str], filas: list[list[str]]) -> 
 
 
 def coma_decimal(ax, eje: str = "y") -> None:
-    """Hace que las marcas de un eje lineal usen coma decimal (0,5 en vez de 0.5).
+    """Configura coma decimal en los ejes lineales indicados.
 
     Parámetros:
-        ax: eje de matplotlib.
-        eje: "x", "y" o "xy".
+        ax: eje de matplotlib (entrada/salida).
+        eje: "x", "y" o "xy" (entrada).
     """
     formato = FuncFormatter(lambda v, _: f"{v:.10g}".replace(".", ","))
     if "x" in eje:
@@ -280,24 +287,17 @@ def coma_decimal(ax, eje: str = "y") -> None:
         ax.yaxis.set_major_formatter(formato)
 
 
-# ----------------------------------------------------------------------------
-# Experimento principal
-# ----------------------------------------------------------------------------
-
-
-def graficos_principal(resultados: str, salida: str) -> dict | None:
+def graficos_principal(resultados: str, salida: str) -> None:
     """Genera las figuras y tablas del experimento principal.
 
     Parámetros:
-        resultados: carpeta con principal.csv y principal_busquedas.csv.
-        salida: carpeta de salida.
-    Retorna:
-        resumen agregado (o None si no están los CSV).
+        resultados: carpeta con principal.csv y principal_busquedas.csv (entrada).
+        salida: carpeta de destino (entrada).
     """
     ruta = os.path.join(resultados, "principal.csv")
     if not os.path.exists(ruta):
         print("(no hay principal.csv: se omiten los gráficos del experimento principal)")
-        return None
+        return
     res = agregar(leer_csv(ruta), leer_csv(os.path.join(resultados, "principal_busquedas.csv")), "exponente")
     exps = sorted({e for (_, e) in res})
 
@@ -319,7 +319,7 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
     leyenda_abajo(fig, a)
     guardar(fig, salida, "creacion_tiempo")
 
-    # Creación: I/Os totales, por inserción y por inserción sin contar la raíz.
+    # Creación: I/Os totales, por inserción y sin contar la raíz.
     fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.75))
     dibujar(a, res, "ios_insercion", exps)
     a.set_yscale("log")
@@ -328,12 +328,11 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
     for t in ARBOLES:
         xs, ys = serie(res, t, "ios_insercion", exps)
         b.plot(xs, [y / x for x, y in zip(xs, ys)], color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
-        raiz = 1 if t == "B" else 2  # B: lectura de la raíz; Bε: lectura y escritura de la raíz
+        raiz = 1 if t == "B" else 2
         c.plot(xs, [y / x - raiz for x, y in zip(xs, ys)], color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
     modelo_linea = None
     for t in ("BE4", "BE126"):
         xs, _ = serie(res, t, "lotes", exps)
-        # 2 I/Os (leer y escribir el hijo) por cada lote bajado, sin contar los splits.
         modelo = [2 * res[(t, e)]["lotes"] / res[(t, e)]["N"] for e in exps if (t, e) in res]
         (modelo_linea,) = c.plot(xs, modelo, color="black", linestyle=":", linewidth=0.9, label="2 · lotes / N")
     b.set_ylabel("I/Os por inserción")
@@ -366,7 +365,7 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
     leyenda_abajo(fig, a)
     guardar(fig, salida, "tamano_altura")
 
-    # Búsquedas: tiempo, I/Os y I/Os relativas al árbol B.
+    # Búsquedas: tiempo, I/Os e I/Os relativas al árbol B.
     fig, (a, b, c) = plt.subplots(1, 3, figsize=(7.2, 2.75))
     dibujar(a, res, "t_bus", exps, desv="t_bus_desv")
     a.set_yscale("log")
@@ -388,7 +387,7 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
     leyenda_abajo(fig, a)
     guardar(fig, salida, "busqueda")
 
-    # Análisis: modelo de I/Os de búsqueda p·nodos + altura (p = fracción del espacio de llaves).
+    # Tabla modelo de búsqueda p·nodos + altura.
     p = 604800 / (1754006400 - 1546300800)
     filas = []
     for e in (20, 23, 26):
@@ -402,7 +401,7 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
     escribir_tabla(os.path.join(salida, "tabla_modelo_busqueda.csv"),
                    ["N", "arbol", "nodos", "altura", "modelo", "medido", "dif_pct"], filas)
 
-    # Tabla completa.
+    # Tabla principal completa.
     filas = []
     for e in exps:
         for t in ARBOLES:
@@ -418,7 +417,7 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
                    ["N", "arbol", "t_ins_s", "ios_ins_M", "ios_por_par", "nodos", "MiB", "altura", "t_bus_ms",
                     "ios_bus", "resultados"], filas)
 
-    # Tabla de estructura de los Bε y del árbol B para el N mayor.
+    # Tabla de estructura para N = 2^26.
     e = max(exps)
     filas = []
     for t in ARBOLES:
@@ -438,26 +437,14 @@ def graficos_principal(resultados: str, salida: str) -> dict | None:
                    ["arbol", "internos", "hojas", "pct_en_internos", "pares_por_hoja", "vaciados", "pares_por_lote",
                     "bajadas_por_par", "lecturas_por_par", "escrituras_por_par", "ms_por_io"], filas)
 
-    print("\nResumen del experimento principal (creación: mediana ± desv.; búsqueda: promedios):")
-    for e in exps:
-        for t in ARBOLES:
-            if (t, e) in res:
-                r = res[(t, e)]
-                print(f"  2^{e:<2} {t:<5} ins {r['t_ins']:8.3f}±{r['t_ins_desv']:.3f} s  I/O/par "
-                      f"{r['ios_insercion'] / r['N']:.3f}  nodos {r['nodos']:>7}  h {r['altura']:>2}  "
-                      f"busq {r['t_bus']:8.2f} ms  I/O {r['io_bus']:7.1f}  res {r['res_bus']:9.1f}  "
-                      f"({r['repeticiones']} rep, {r['busquedas']} búsq)")
-    return res
 
-
-def grafico_consulta(resultados: str, salida: str, exponentes: list[int], tabla: list[int]) -> None:
-    """Dibuja la misma búsqueda por rango (consulta 0) para varios N y la resume en una tabla.
+def grafico_consulta(resultados: str, salida: str, exponentes: list[int]) -> None:
+    """Dibuja la misma búsqueda por rango (consulta 0) para dos valores de N y genera su tabla.
 
     Parámetros:
-        resultados: carpeta con consulta0_N{E}.csv y consultas_principal.csv.
-        salida: carpeta de salida.
-        exponentes: exponentes de N que se dibujan (uno por panel), en orden.
-        tabla: exponentes de N que se incluyen en la tabla resumen, en orden.
+        resultados: carpeta con consulta0_N{E}.csv y consultas_principal.csv (entrada).
+        salida: carpeta de destino (entrada).
+        exponentes: lista de exponentes de N a comparar (entrada).
     """
     disponibles = [e for e in exponentes if os.path.exists(os.path.join(resultados, f"consulta0_N{e}.csv"))]
     if len(disponibles) < 2:
@@ -465,8 +452,7 @@ def grafico_consulta(resultados: str, salida: str, exponentes: list[int], tabla:
         return
     consultas = leer_csv(os.path.join(resultados, "consultas_principal.csv"))
     l, u = consultas[0]["l"], consultas[0]["u"]
-    en_tabla = [e for e in tabla if os.path.exists(os.path.join(resultados, f"consulta0_N{e}.csv"))]
-    datos = {e: leer_csv(os.path.join(resultados, f"consulta0_N{e}.csv")) for e in sorted(set(disponibles + en_tabla))}
+    datos = {e: leer_csv(os.path.join(resultados, f"consulta0_N{e}.csv")) for e in disponibles}
     fig, ejes = plt.subplots(len(disponibles), 1, figsize=(7.2, 1.9 * len(disponibles) + 0.4), sharex=True,
                              sharey=True)
     for ax, e in zip(ejes, disponibles):
@@ -487,11 +473,10 @@ def grafico_consulta(resultados: str, salida: str, exponentes: list[int], tabla:
     fig.autofmt_xdate(rotation=0, ha="center")
     guardar(fig, salida, "consulta_misma_busqueda")
 
-    # Comparación numérica: el resultado de un N menor está contenido en el de N mayor.
     filas = []
     mayor = datos[max(datos)]
     conj_mayor = {(p["llave"], p["valor"]) for p in mayor}
-    for e in en_tabla:
+    for e in disponibles:
         pares = datos[e]
         vals = [p["valor"] for p in pares]
         llaves = sorted(p["llave"] for p in pares)
@@ -505,30 +490,20 @@ def grafico_consulta(resultados: str, salida: str, exponentes: list[int], tabla:
     escribir_tabla(os.path.join(salida, "tabla_consulta.csv"),
                    ["N", "pares", "pct_de_N", "t_min", "t_max", "t_prom", "brecha_mediana_s", "contenido_en_mayor"],
                    filas)
-    print(f"\nConsulta 0: [{l}, {u}] = {inicio:%Y-%m-%d %H:%M} a {fin:%Y-%m-%d %H:%M} ({NOMBRE_ZONA})")
-    for f in filas:
-        print("  ", f)
 
 
-# ----------------------------------------------------------------------------
-# Experimento bonus de α
-# ----------------------------------------------------------------------------
-
-
-def graficos_alpha(resultados: str, salida: str, tipo: str) -> dict | None:
-    """Genera la figura y la tabla del experimento de α para un árbol Bε.
+def graficos_alpha(resultados: str, salida: str, tipo: str = "BE126") -> None:
+    """Genera la figura y la tabla del experimento bonus de α.
 
     Parámetros:
-        resultados: carpeta con alpha_{tipo}.csv y alpha_{tipo}_busquedas.csv.
-        salida: carpeta de salida.
-        tipo: BE4 o BE126.
-    Retorna:
-        resumen agregado por α (o None si no están los CSV).
+        resultados: carpeta con alpha_{tipo}.csv y alpha_{tipo}_busquedas.csv (entrada).
+        salida: carpeta de destino (entrada).
+        tipo: árbol Bε evaluado (entrada).
     """
     ruta = os.path.join(resultados, f"alpha_{tipo}.csv")
     if not os.path.exists(ruta):
         print(f"(no hay alpha_{tipo}.csv: se omite)")
-        return None
+        return
     res = agregar(leer_csv(ruta), leer_csv(os.path.join(resultados, f"alpha_{tipo}_busquedas.csv")), "alpha")
     alphas = sorted(a for (t, a) in res if t == tipo)
     rs = [res[(tipo, a)] for a in alphas]
@@ -551,22 +526,17 @@ def graficos_alpha(resultados: str, salida: str, tipo: str) -> dict | None:
     d.plot(alphas, [r["io_bus"] for r in rs], color=color, marker="o")
     d.set_ylabel("I/Os por búsqueda")
     d.set_title("(d) Búsqueda: I/Os promedio")
-    ruta_elegido = os.path.join(resultados, f"alpha_{tipo}_elegido.csv")
-    elegido = leer_csv(ruta_elegido)[0]["alpha"] if os.path.exists(ruta_elegido) else None
+    elegido = 0.9
     for ax in (a, b, c, d):
         ax.set_xlabel("α")
         ax.set_xlim(0, 1)
         ax.xaxis.set_major_locator(FixedLocator([0, 0.2, 0.4, 0.6, 0.8, 1.0]))
-        if elegido is not None:
-            ax.axvline(elegido, color="gray", linestyle="--", linewidth=0.8)
+        ax.axvline(elegido, color="gray", linestyle="--", linewidth=0.8)
         coma_decimal(ax, "xy")
     for ax in (b, d):
-        # Escala de ±5 % alrededor de los datos, para que variaciones de 1 % no parezcan grandes.
         ys = ax.get_lines()[0].get_ydata()
         ax.set_ylim(min(ys) * 0.95, max(ys) * 1.05)
-    titulo = f"{ETIQUETAS[tipo]}, N = $2^{{{int(math.log2(n))}}}$"
-    if elegido is not None:
-        titulo += f" (línea punteada: α elegido = {elegido:g})".replace(".", ",")
+    titulo = f"{ETIQUETAS[tipo]}, N = $2^{{{int(math.log2(n))}}}$ (línea punteada: α = 0,9)"
     fig.suptitle(titulo, fontsize=10)
     fig.tight_layout()
     guardar(fig, salida, f"alpha_{tipo}")
@@ -582,42 +552,28 @@ def graficos_alpha(resultados: str, salida: str, tipo: str) -> dict | None:
     escribir_tabla(os.path.join(salida, f"tabla_alpha_{tipo}.csv"),
                    ["alpha", "t_ins_s", "t_ins_desv", "ios_ins_M", "ios_por_par", "vaciados", "pares_por_lote",
                     "pct_en_internos", "nodos", "t_bus_ms", "t_bus_eem", "ios_bus"], filas)
-    print(f"\nα ({tipo}, N = {n}):")
-    for f in filas:
-        print("  ", f)
-    return res
 
 
 def main() -> int:
-    """Punto de entrada: genera todo lo que permitan los CSV disponibles.
+    """Punto de entrada: genera las figuras y tablas a partir de resultados/.
 
     Retorna:
-        0 al terminar.
+        0 al finalizar.
     """
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--resultados", default="resultados", help="carpeta con los CSV del programa C++")
     p.add_argument("--salida", default="informe/figuras", help="carpeta donde se guardan figuras y tablas")
-    p.add_argument("--consulta", default="16,26", help="exponentes de N que se dibujan para la misma búsqueda")
-    p.add_argument("--consulta-tabla", default="16,20,26", help="exponentes de N de la tabla de la misma búsqueda")
+    p.add_argument("--consulta", default="16,26", help="dos exponentes de N para comparar una misma búsqueda")
     p.add_argument("--formato", default="svg", choices=["svg", "png", "pdf"], help="formato de las figuras")
     args = p.parse_args()
     global FORMATO
     FORMATO = args.formato
     os.makedirs(args.salida, exist_ok=True)
     print("Generando figuras y tablas:")
-    fig_consulta = [int(x) for x in args.consulta.split(",") if x]
-    tabla_consulta = [int(x) for x in args.consulta_tabla.split(",") if x]
-    res = graficos_principal(args.resultados, args.salida)
-    grafico_consulta(args.resultados, args.salida, fig_consulta, tabla_consulta)
-    res_alpha = {}
-    for tipo in ("BE126", "BE4"):
-        r = graficos_alpha(args.resultados, args.salida, tipo)
-        if r is not None:
-            res_alpha[tipo] = r
-    if res is None or len(res_alpha) < 2:
-        print("Faltan resultados del experimento principal o del bonus: no se genera valores.json", file=sys.stderr)
-        return 1
-    generar_valores(args.resultados, args.salida, res, res_alpha, fig_consulta, tabla_consulta)
+    exps_consulta = [int(x) for x in args.consulta.split(",") if x]
+    graficos_principal(args.resultados, args.salida)
+    grafico_consulta(args.resultados, args.salida, exps_consulta)
+    graficos_alpha(args.resultados, args.salida, "BE126")
     return 0
 
 

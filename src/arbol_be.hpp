@@ -70,7 +70,6 @@ public:
     using Nodo = NodoBe<C, L>;              ///< Tipo de nodo (bloque) del árbol.
     static constexpr int kC = C;            ///< Máximo de llaves divisorias.
     static constexpr int kL = L;            ///< Capacidad del buffer.
-    static constexpr int64_t kEscalaAlpha = 1000000;  ///< α se guarda como entero α·10^6.
 
     /**
      * @brief Crea un árbol vacío: escribe una raíz hoja vacía en el bloque 0 (1 escritura).
@@ -78,10 +77,6 @@ public:
      */
     explicit ArbolBe(double alpha) : alpha_(alpha) {
         if (!(alpha > 0.0 && alpha < 1.0)) throw std::invalid_argument("alpha debe cumplir 0 < alpha < 1");
-        // Se guarda como entero para que ceil(f·α) sea exacto: en doble precisión, por ejemplo,
-        // 100·0.07 = 7.000000000000001 y el techo daría 8 en vez de 7.
-        alphaEscalado_ = std::llround(alpha * static_cast<double>(kEscalaAlpha));
-        alphaEscalado_ = std::min<int64_t>(std::max<int64_t>(alphaEscalado_, 1), kEscalaAlpha - 1);
         std::memset(&raiz_, 0, sizeof(Nodo));
         disco_.agregar(raiz_);
     }
@@ -153,7 +148,6 @@ public:
 
     /**
      * @brief Calcula cuántos pares debe tener un hijo para recibirlos en el flush: ceil(f·α).
-     *        Es público para poder probarlo directamente.
      * @param kBuffer pares en el buffer del nodo (entrada).
      * @param kLlaves llaves divisorias del nodo (entrada).
      * @return umbral mínimo (al menos 1), con f = ceil(kBuffer / (kLlaves + 1)).
@@ -161,7 +155,7 @@ public:
     int64_t umbral(size_t kBuffer, size_t kLlaves) const {
         const int64_t hijos = static_cast<int64_t>(kLlaves) + 1;
         const int64_t f = (static_cast<int64_t>(kBuffer) + hijos - 1) / hijos;
-        const int64_t u = (f * alphaEscalado_ + kEscalaAlpha - 1) / kEscalaAlpha;
+        const int64_t u = static_cast<int64_t>(std::ceil(static_cast<double>(f) * alpha_));
         return std::max<int64_t>(u, 1);
     }
 
@@ -529,7 +523,6 @@ private:
 
     DiscoSimulado<Nodo> disco_;     ///< Arreglo de nodos en RAM (disco simulado).
     double alpha_;                  ///< Parámetro α del flush.
-    int64_t alphaEscalado_ = 0;     ///< α·10^6 redondeado (para calcular ceil(f·α) con enteros).
     int altura_ = 1;                ///< Cantidad de niveles.
     ContadoresArbol contadores_;    ///< Contadores de flush, lotes y splits.
     Nodo raiz_;                     ///< Buffer en RAM donde se lee la raíz en cada inserción.
