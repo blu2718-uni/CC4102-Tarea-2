@@ -78,7 +78,7 @@ Los árboles y los experimentos están en C++17 (`src/`). El código de los grá
     ([*Archivo*], [*Contenido*]),
     (
       [`par.hpp`, `arbol_comun.hpp`], [par llave-valor de 8 bytes (mismo formato que `datos.bin`), inserción ordenada y mezcla de lotes],
-      [`disco.hpp`], [disco simulado en RAM: vector de bloques con conteo de lecturas/escrituras y serialización a archivo],
+      [`disco.hpp`], [disco simulado en RAM: arreglo de bloques (en segmentos) con conteo de lecturas/escrituras y serialización a archivo],
       [`archivo.hpp`], [escritura de archivos de bloques y lectura de un nodo con `pread` y `O_DIRECT`],
       [`arbol_b.hpp`, `arbol_be.hpp`], [árbol B y árbol #Be: splits, vaciado, inserción y búsqueda por rango],
       [`datos.hpp`, `main.cpp`], [lectura por bloques de `datos.bin`; experimento principal y bonus de $alpha$],
@@ -93,7 +93,7 @@ Los árboles y los experimentos están en C++17 (`src/`). El código de los grá
 
 Los nodos son `struct` con exactamente los campos del enunciado y en el mismo orden (`NodoB<340>`, `NodoBe<4,506>` y `NodoBe<126,384>`); un `static_assert` comprueba que cada uno mide 4096 bytes. Como no contienen punteros, un nodo se guarda y se lee copiando sus bytes.
 
-El disco simulado es un `std::vector<Nodo>` en RAM con tres operaciones, y los algoritmos solo acceden a los nodos a través de ellas: `leer(i, nodo)` copia el bloque $i$ completo a una variable local y cuenta una lectura; `escribir(i, nodo)` copia la variable al bloque $i$ y cuenta una escritura; y `agregar(nodo)` la inserta al final del arreglo, cuenta una escritura y retorna su posición. Como los algoritmos trabajan siempre sobre copias locales, igual que si hubieran traído el bloque del disco, los contadores son exactamente la cantidad de bloques transferidos. La raíz está siempre en el bloque 0.
+El disco simulado es un arreglo de nodos en RAM, guardado en segmentos de 1024 nodos (4 MiB) para que crezca sin copiar los nodos que ya tiene (un `std::vector`, al crecer, necesitaría por un momento el doble de memoria). Tiene tres operaciones, y los algoritmos solo acceden a los nodos a través de ellas: `leer(i, nodo)` copia el bloque $i$ completo a una variable local y cuenta una lectura; `escribir(i, nodo)` copia la variable al bloque $i$ y cuenta una escritura; y `agregar(nodo)` la inserta al final del arreglo, cuenta una escritura y retorna su posición. Como los algoritmos trabajan siempre sobre copias locales, igual que si hubieran traído el bloque del disco, los contadores son exactamente la cantidad de bloques transferidos. La raíz está siempre en el bloque 0.
 
 Al terminar las inserciones, el árbol se escribe en un archivo binario, bloque por bloque y en orden (el nodo $i$ queda en el byte $i dot 4096$), se hace `fsync` y se le pide al sistema operativo que saque el archivo de su caché de páginas (`posix_fadvise`). Después se destruye el árbol en RAM. Las búsquedas abren el archivo con `O_DIRECT`: leer el nodo $i$ es un `pread` de 4096 bytes en la posición $i dot 4096$ hacia un buffer alineado, que va al dispositivo sin pasar por la caché del sistema operativo. Sin `O_DIRECT`, después de la primera búsqueda el archivo quedaría en esa caché y se mediría la velocidad de la RAM. Cada nodo leído es una I/O de búsqueda.
 

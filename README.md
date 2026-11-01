@@ -53,7 +53,7 @@ También se puede ejecutar todo el flujo secuencialmente con `make todo`.
 src/
   par.hpp           Par llave-valor (int32 + float32, 8 bytes) y comparador por llave
   arbol_comun.hpp   Inserción ordenada, mezcla de lotes y estructuras de estadísticas
-  disco.hpp         Disco simulado en RAM (std::vector de nodos con conteo de I/Os)
+  disco.hpp         Disco simulado en RAM (arreglo de nodos en segmentos, con conteo de I/Os)
   archivo.hpp       Escritura secuencial de bloques y lectura desde archivo con pread/O_DIRECT
   datos.hpp         Lectura secuencial por bloques de datos.bin
   arbol_b.hpp       Árbol B (b = 340): split, inserción y búsqueda por rango

@@ -250,38 +250,28 @@ private:
         ++contadores_.vaciados;
         std::vector<Par> original;
         original.swap(v.buffer);
+        const Par* pares = original.data();
         const size_t nb = original.size();
         const size_t K = v.llaves.size();
-        // fin[i] = fin (exclusivo) del grupo del hijo i dentro de original.
-        std::vector<size_t> fin(K + 1);
-        size_t pos = 0;
+        // El grupo del hijo i es pares[lim[i], lim[i+1]): pares con llave en (llaves[i-1], llaves[i]].
+        std::vector<size_t> lim(K + 2);
+        lim[0] = 0;
         for (size_t i = 0; i < K; ++i) {
-            pos = static_cast<size_t>(
-                std::upper_bound(original.begin() + static_cast<std::ptrdiff_t>(pos), original.end(), v.llaves[i],
-                                 CompararLlave{}) -
-                original.begin());
-            fin[i] = pos;
+            lim[i + 1] = static_cast<size_t>(std::upper_bound(pares + lim[i], pares + nb, v.llaves[i], CompararLlave{}) -
+                                             pares);
         }
-        fin[K] = nb;
+        lim[K + 1] = nb;
         const int64_t minimo = umbral(nb, K);
-        std::vector<char> elegido(K + 1, 0);
+        auto tamano = [&](size_t i) { return lim[i + 1] - lim[i]; };
+        auto elegido = [&](size_t i) { return static_cast<int64_t>(tamano(i)) >= minimo; };
         v.buffer.reserve(L);
-        size_t inicio = 0;
         for (size_t i = 0; i <= K; ++i) {
-            const size_t m = fin[i] - inicio;
-            if (static_cast<int64_t>(m) >= minimo) {
-                elegido[i] = 1;
-            } else {
-                v.buffer.insert(v.buffer.end(), original.begin() + static_cast<std::ptrdiff_t>(inicio),
-                                original.begin() + static_cast<std::ptrdiff_t>(fin[i]));
-            }
-            inicio = fin[i];
+            if (!elegido(i)) v.buffer.insert(v.buffer.end(), pares + lim[i], pares + lim[i + 1]);
         }
         std::vector<NuevoHijo> nuevos;
         for (size_t j = K + 1; j-- > 0;) {
-            if (!elegido[j]) continue;
-            const size_t ini = (j == 0) ? 0 : fin[j - 1];
-            empujar(v.hijos[j], original.data() + ini, fin[j] - ini, nuevos);
+            if (!elegido(j)) continue;
+            empujar(v.hijos[j], pares + lim[j], tamano(j), nuevos);
             for (size_t q = 0; q < nuevos.size(); ++q) {
                 v.llaves.insert(v.llaves.begin() + static_cast<std::ptrdiff_t>(j + q), nuevos[q].llave);
                 v.hijos.insert(v.hijos.begin() + static_cast<std::ptrdiff_t>(j + 1 + q), nuevos[q].indice);
@@ -294,9 +284,9 @@ private:
      *
      * - Hoja: ver empujarAHoja().
      * - Interno: mientras k_buffer(U) + m > l_max, hace flush de U. Después mezcla
-     *   el lote en el buffer de U. Si U quedó con más de C llaves, lo divide:
-     *   la primera parte queda en la posición de U y las demás van al final del
-     *   arreglo. Si no, solo escribe U.
+     *   el lote en el buffer de U y lo particiona en partes de a lo más C llaves
+     *   (una sola parte si U no se llenó). La primera parte queda en la posición
+     *   de U y las demás van al final del arreglo.
      *
      * @param indice bloque del hijo (entrada).
      * @param lote   pares ordenados que bajan; todos pertenecen al rango del hijo (entrada).
@@ -320,11 +310,6 @@ private:
         const size_t k = t.buffer.size();
         t.buffer.resize(k + m);
         mezclarAlFinal(t.buffer.data(), k, lote, m);
-        if (t.llaves.size() <= static_cast<size_t>(C)) {
-            aNodo(t, u);
-            disco_.escribir(indice, u);
-            return;
-        }
         std::vector<NodoTrabajo> piezas;
         std::vector<int32_t> separadores;
         particionar(t, piezas, separadores);
@@ -366,18 +351,32 @@ private:
         }
         Par mezcla[2 * L];
         std::merge(hoja.buffer, hoja.buffer + k, lote, lote + m, mezcla, CompararLlave{});
+        Nodo izq, der;
+        const int32_t km = partirHoja(mezcla, s, izq, der);
+        disco_.escribir(indice, izq);
+        nuevos.push_back({km, disco_.agregar(der)});
+        ++contadores_.divisionesHoja;
+    }
+
+    /**
+     * @brief Reparte s pares ordenados en dos hojas nuevas: los primeros ceil(s/2) en izq
+     *        y el resto en der.
+     * @param pares pares ordenados por llave, con 2 <= s <= 2·l_max (entrada).
+     * @param s     cantidad de pares (entrada).
+     * @param izq   hoja izquierda, rellena con ceros (salida).
+     * @param der   hoja derecha, rellena con ceros (salida).
+     * @return llave divisoria: la del último par de izq.
+     */
+    static int32_t partirHoja(const Par* pares, size_t s, Nodo& izq, Nodo& der) {
         const size_t nIzq = (s + 1) / 2;
         const size_t nDer = s - nIzq;
-        Nodo izq, der;
         std::memset(&izq, 0, sizeof(Nodo));
         std::memset(&der, 0, sizeof(Nodo));
         izq.k_buffer = static_cast<int32_t>(nIzq);
         der.k_buffer = static_cast<int32_t>(nDer);
-        std::memcpy(izq.buffer, mezcla, nIzq * sizeof(Par));
-        std::memcpy(der.buffer, mezcla + nIzq, nDer * sizeof(Par));
-        disco_.escribir(indice, izq);
-        nuevos.push_back({mezcla[nIzq - 1].llave, disco_.agregar(der)});
-        ++contadores_.divisionesHoja;
+        std::memcpy(izq.buffer, pares, nIzq * sizeof(Par));
+        std::memcpy(der.buffer, pares + nIzq, nDer * sizeof(Par));
+        return pares[nIzq - 1].llave;
     }
 
     /**
@@ -415,8 +414,19 @@ private:
     static void particionar(NodoTrabajo& u, std::vector<NodoTrabajo>& piezas, std::vector<int32_t>& separadores) {
         if (u.llaves.size() <= static_cast<size_t>(C)) {
             piezas.push_back(std::move(u));
-            return;
+        } else {
+            dividirYParticionar(u, piezas, separadores);
         }
+    }
+
+    /**
+     * @brief Divide una copia de trabajo una vez con dividirInterno() y particiona cada mitad.
+     * @param u           nodo a dividir, con al menos 1 llave (entrada).
+     * @param piezas      partes resultantes, de izquierda a derecha (salida, se agregan al final).
+     * @param separadores llaves divisorias entre partes consecutivas (salida, se agregan al final).
+     */
+    static void dividirYParticionar(const NodoTrabajo& u, std::vector<NodoTrabajo>& piezas,
+                                    std::vector<int32_t>& separadores) {
         NodoTrabajo izq, der;
         int32_t km;
         dividirInterno(u, izq, der, km);
@@ -430,23 +440,17 @@ private:
      *
      * La llave en la posición l_max/2 (contando desde 1) es la divisoria. Los
      * primeros l_max/2 pares van a R_izq y el resto a R_der, ambos al final del
-     * arreglo. La raíz nueva (interna, con p en su buffer) se escribe en el bloque 0.
+     * arreglo (con l_max par, es el mismo corte ceil(s/2) de partirHoja()). La
+     * raíz nueva (interna, con p en su buffer) se escribe en el bloque 0.
      *
      * @param p par que se estaba insertando (entrada).
      */
     void dividirRaizHoja(const Par& p) {
-        constexpr int kMitad = L / 2;
         Nodo izq, der, nueva;
-        std::memset(&izq, 0, sizeof(Nodo));
-        std::memset(&der, 0, sizeof(Nodo));
         std::memset(&nueva, 0, sizeof(Nodo));
-        izq.k_buffer = kMitad;
-        der.k_buffer = L - kMitad;
-        std::memcpy(izq.buffer, raiz_.buffer, kMitad * sizeof(Par));
-        std::memcpy(der.buffer, raiz_.buffer + kMitad, (L - kMitad) * sizeof(Par));
         nueva.es_interno = 1;
         nueva.k_llaves = 1;
-        nueva.llaves[0] = raiz_.buffer[kMitad - 1].llave;
+        nueva.llaves[0] = partirHoja(raiz_.buffer, L, izq, der);
         nueva.hijos[0] = disco_.agregar(izq);
         nueva.hijos[1] = disco_.agregar(der);
         nueva.k_buffer = 1;
@@ -459,24 +463,20 @@ private:
     /**
      * @brief Split de la raíz interna cuando llega a C (o más) llaves.
      *
-     * Divide la raíz con dividirInterno(). Si alguna mitad sigue con más de C
-     * llaves, la vuelve a dividir. Las partes van al final del arreglo y r pasa
-     * a ser la raíz nueva (sin pares en el buffer), con las llaves divisorias y
-     * los índices de esas partes. Quien llama la escribe en el bloque 0. En el
-     * caso, casi imposible, de que la raíz nueva también llegue a C llaves, se
-     * repite el proceso.
+     * A diferencia de los otros nodos, la raíz se divide ya con C llaves, como pide
+     * el enunciado; por eso usa dividirYParticionar() y no particionar(). Las
+     * mitades con más de C llaves se vuelven a dividir. Las partes van al final
+     * del arreglo y r pasa a ser la raíz nueva (sin pares en el buffer), con las
+     * llaves divisorias y los índices de esas partes. Quien llama la escribe en el
+     * bloque 0. En el caso, casi imposible, de que la raíz nueva también llegue a
+     * C llaves, se repite el proceso.
      *
      * @param r copia de trabajo de la raíz; queda convertida en la raíz nueva (entrada/salida).
      */
     void dividirRaizInterna(NodoTrabajo& r) {
-        NodoTrabajo izq, der;
-        int32_t km;
-        dividirInterno(r, izq, der, km);
         std::vector<NodoTrabajo> piezas;
         std::vector<int32_t> separadores;
-        particionar(izq, piezas, separadores);
-        separadores.push_back(km);
-        particionar(der, piezas, separadores);
+        dividirYParticionar(r, piezas, separadores);
         contadores_.divisionesInternas += piezas.size() - 1;
         NodoTrabajo nueva;
         Nodo bloque;

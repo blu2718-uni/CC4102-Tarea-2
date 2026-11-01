@@ -54,10 +54,10 @@ inline void insertarOrdenado(Par* a, int32_t& k, const Par& p) {
 }
 
 /**
- * @brief Mezcla un lote ordenado dentro de un arreglo ordenado, sin memoria auxiliar.
+ * @brief Mezcla un lote ordenado dentro de un arreglo ordenado.
  *
- * Recorre ambos arreglos desde el final. Si hay llaves iguales, los pares del
- * lote quedan después de los que ya estaban.
+ * Copia el lote a continuación de a[0..k) y mezcla las dos partes. La mezcla es
+ * estable: si hay llaves iguales, los pares del lote quedan después de los que ya estaban.
  *
  * @param a    arreglo con a[0..k) ordenado y espacio para k+m pares (entrada/salida).
  * @param k    cantidad de pares válidos en a (entrada).
@@ -65,12 +65,6 @@ inline void insertarOrdenado(Par* a, int32_t& k, const Par& p) {
  * @param m    cantidad de pares del lote (entrada).
  */
 inline void mezclarAlFinal(Par* a, size_t k, const Par* lote, size_t m) {
-    size_t i = k, j = m, w = k + m;
-    while (j > 0) {
-        if (i > 0 && a[i - 1].llave > lote[j - 1].llave) {
-            a[--w] = a[--i];
-        } else {
-            a[--w] = lote[--j];
-        }
-    }
+    std::copy(lote, lote + m, a + k);
+    std::inplace_merge(a, a + k, a + k + m, CompararLlave{});
 }
