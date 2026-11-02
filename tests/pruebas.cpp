@@ -279,10 +279,10 @@ void probarBusquedas(const Arbol& arbol, const std::vector<Par>& datos, const st
         res.clear();
         archivo.reiniciarLecturas();
         Arbol::buscarRango(archivo, l, u, res);
-        const bool ok = mismoMulticonjunto(res, fuerzaBruta(datos, l, u));
-        verificar(ok, nombre + ": búsqueda [" + std::to_string(l) + ", " + std::to_string(u) + "] devolvió " +
-                          std::to_string(res.size()) + " pares, se esperaban " +
-                          std::to_string(fuerzaBruta(datos, l, u).size()));
+        const std::vector<Par> esperados = fuerzaBruta(datos, l, u);
+        verificar(mismoMulticonjunto(res, esperados),
+                  nombre + ": búsqueda [" + std::to_string(l) + ", " + std::to_string(u) + "] devolvió " +
+                      std::to_string(res.size()) + " pares, se esperaban " + std::to_string(esperados.size()));
         if (l <= u) {
             verificar(archivo.lecturas() >= 1 && static_cast<int64_t>(archivo.lecturas()) <= arbol.disco().cantidad(),
                       nombre + ": I/Os de búsqueda dentro de [1, nodos]");
@@ -295,18 +295,16 @@ void probarBusquedas(const Arbol& arbol, const std::vector<Par>& datos, const st
 
 /**
  * @brief Caso completo: construye el árbol, valida invariantes y prueba búsquedas.
- * @tparam Arbol   tipo de árbol.
- * @tparam Fabrica función sin argumentos que devuelve std::unique_ptr<Arbol>.
+ * @tparam Arbol tipo de árbol.
  * @param nombre          nombre del caso (entrada).
- * @param crear           fábrica (entrada).
+ * @param arbol           árbol vacío recién creado (entrada).
  * @param datos           pares a insertar (entrada).
  * @param validarCadaPaso validar después de cada inserción (entrada; solo para casos chicos).
  * @param consultas       cantidad de rangos aleatorios (entrada).
  */
-template <class Arbol, class Fabrica>
-void caso(const std::string& nombre, Fabrica crear, const std::vector<Par>& datos,
+template <class Arbol>
+void caso(const std::string& nombre, std::unique_ptr<Arbol> arbol, const std::vector<Par>& datos,
           bool validarCadaPaso = false, int consultas = 60) {
-    std::unique_ptr<Arbol> arbol = crear();
     std::string error;
     if (validarCadaPaso) {
         std::vector<Par> prefijo;
@@ -405,41 +403,41 @@ int main(int argc, char** argv) {
     std::printf("Árboles con parámetros pequeños (validación tras cada inserción)...\n");
     for (const std::string& t : tipos) {
         const std::vector<Par> v = generar(t, 400, 7);
-        caso<ArbolB<4>>("B<4> " + t + " paso a paso", [] { return std::make_unique<ArbolB<4>>(); }, v, true, 10);
+        caso("B<4> " + t + " paso a paso", std::make_unique<ArbolB<4>>(), v, true, 10);
         for (double a : {0.01, 0.99}) {
             const std::string s = " a=" + std::to_string(a) + " " + t + " paso a paso";
-            caso<ArbolBe<4, 4>>("Be<4,4>" + s, [a] { return std::make_unique<ArbolBe<4, 4>>(a); }, v, true, 10);
-            caso<ArbolBe<4, 6>>("Be<4,6>" + s, [a] { return std::make_unique<ArbolBe<4, 6>>(a); }, v, true, 10);
+            caso("Be<4,4>" + s, std::make_unique<ArbolBe<4, 4>>(a), v, true, 10);
+            caso("Be<4,6>" + s, std::make_unique<ArbolBe<4, 6>>(a), v, true, 10);
         }
     }
 
     std::printf("Árboles con parámetros pequeños (3000 pares)...\n");
     for (const std::string& t : tipos) {
         const std::vector<Par> v = generar(t, 3000, 11);
-        caso<ArbolB<4>>("B<4> " + t, [] { return std::make_unique<ArbolB<4>>(); }, v);
-        caso<ArbolB<6>>("B<6> " + t, [] { return std::make_unique<ArbolB<6>>(); }, v);
-        caso<ArbolB<340>>("B<340> " + t, [] { return std::make_unique<ArbolB<340>>(); }, v);
+        caso("B<4> " + t, std::make_unique<ArbolB<4>>(), v);
+        caso("B<6> " + t, std::make_unique<ArbolB<6>>(), v);
+        caso("B<340> " + t, std::make_unique<ArbolB<340>>(), v);
         for (double a : alphas) {
             const std::string s = " a=" + std::to_string(a) + " " + t;
-            caso<ArbolBe<4, 4>>("Be<4,4>" + s, [a] { return std::make_unique<ArbolBe<4, 4>>(a); }, v);
-            caso<ArbolBe<4, 6>>("Be<4,6>" + s, [a] { return std::make_unique<ArbolBe<4, 6>>(a); }, v);
-            caso<ArbolBe<6, 10>>("Be<6,10>" + s, [a] { return std::make_unique<ArbolBe<6, 10>>(a); }, v);
-            caso<ArbolBe<8, 4>>("Be<8,4>" + s, [a] { return std::make_unique<ArbolBe<8, 4>>(a); }, v);
+            caso("Be<4,4>" + s, std::make_unique<ArbolBe<4, 4>>(a), v);
+            caso("Be<4,6>" + s, std::make_unique<ArbolBe<4, 6>>(a), v);
+            caso("Be<6,10>" + s, std::make_unique<ArbolBe<6, 10>>(a), v);
+            caso("Be<8,4>" + s, std::make_unique<ArbolBe<8, 4>>(a), v);
         }
     }
 
     std::printf("Árbol vacío...\n");
-    caso<ArbolB<340>>("B vacío", [] { return std::make_unique<ArbolB<340>>(); }, {});
-    caso<ArbolBe<4, 506>>("Be4 vacío", [] { return std::make_unique<ArbolBe<4, 506>>(0.5); }, {});
+    caso("B vacío", std::make_unique<ArbolB<340>>(), {});
+    caso("Be4 vacío", std::make_unique<ArbolBe<4, 506>>(0.5), {});
 
     std::printf("Parámetros reales con 200000 pares (búsquedas con O_DIRECT)...\n");
     for (const std::string& t : {std::string("aleatorio"), std::string("ascendente"), std::string("duplicados")}) {
         const std::vector<Par> v = generar(t, 200000, 3);
-        caso<ArbolB<340>>("B " + t, [] { return std::make_unique<ArbolB<340>>(); }, v, false, 40);
+        caso("B " + t, std::make_unique<ArbolB<340>>(), v, false, 40);
         for (double a : {0.1, 0.5, 0.9}) {
             const std::string s = " a=" + std::to_string(a) + " " + t;
-            caso<ArbolBe<4, 506>>("Be4" + s, [a] { return std::make_unique<ArbolBe<4, 506>>(a); }, v, false, 40);
-            caso<ArbolBe<126, 384>>("Be126" + s, [a] { return std::make_unique<ArbolBe<126, 384>>(a); }, v, false, 40);
+            caso("Be4" + s, std::make_unique<ArbolBe<4, 506>>(a), v, false, 40);
+            caso("Be126" + s, std::make_unique<ArbolBe<126, 384>>(a), v, false, 40);
         }
     }
 
@@ -450,9 +448,9 @@ int main(int argc, char** argv) {
         std::vector<Par> v;
         LectorDatos lector(rutaDatos, 1 << 17);
         lector.siguiente(v, 1 << 17);
-        caso<ArbolB<340>>("B datos.bin", [] { return std::make_unique<ArbolB<340>>(); }, v, false, 100);
-        caso<ArbolBe<4, 506>>("Be4 datos.bin", [] { return std::make_unique<ArbolBe<4, 506>>(0.5); }, v, false, 100);
-        caso<ArbolBe<126, 384>>("Be126 datos.bin", [] { return std::make_unique<ArbolBe<126, 384>>(0.5); }, v, false, 100);
+        caso("B datos.bin", std::make_unique<ArbolB<340>>(), v, false, 100);
+        caso("Be4 datos.bin", std::make_unique<ArbolBe<4, 506>>(0.5), v, false, 100);
+        caso("Be126 datos.bin", std::make_unique<ArbolBe<126, 384>>(0.5), v, false, 100);
     } else {
         std::printf("(sin data/datos.bin: se omite la prueba con datos reales)\n");
     }

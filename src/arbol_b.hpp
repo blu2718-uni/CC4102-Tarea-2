@@ -84,7 +84,6 @@ public:
         Nodo izq, der;
         Par mediana;
         dividir(raiz, izq, der, mediana);
-        contarDivision(raiz);
         const int32_t iIzq = disco_.agregar(izq);
         const int32_t iDer = disco_.agregar(der);
         Nodo nueva;
@@ -166,7 +165,8 @@ private:
     }
 
     /**
-     * @brief Divide un nodo lleno (sección 3.4.1).
+     * @brief Divide un nodo lleno (sección 3.4.1) y suma el split al contador de hojas
+     *        o al de nodos internos.
      *
      * El par en la posición B/2 (contando desde 1) es la mediana. Los B/2-1 pares
      * a su izquierda van a izq y los B/2 a su derecha van a der. Si el nodo es
@@ -177,7 +177,7 @@ private:
      * @param der     nuevo nodo derecho, inicializado en cero (salida).
      * @param mediana par mediano que sube al padre (salida).
      */
-    static void dividir(const Nodo& lleno, Nodo& izq, Nodo& der, Par& mediana) {
+    void dividir(const Nodo& lleno, Nodo& izq, Nodo& der, Par& mediana) {
         constexpr int kIzq = B / 2 - 1;
         constexpr int kDer = B / 2;
         std::memset(&izq, 0, sizeof(Nodo));
@@ -192,15 +192,6 @@ private:
         if (lleno.es_interno) {
             std::memcpy(izq.hijos, lleno.hijos, (kIzq + 1) * sizeof(int32_t));
             std::memcpy(der.hijos, lleno.hijos + kIzq + 1, (kDer + 1) * sizeof(int32_t));
-        }
-    }
-
-    /**
-     * @brief Suma un split al contador de hojas o al de nodos internos.
-     * @param n nodo que se dividió (entrada).
-     */
-    void contarDivision(const Nodo& n) {
-        if (n.es_interno) {
             ++contadores_.divisionesInternas;
         } else {
             ++contadores_.divisionesHoja;
@@ -237,7 +228,6 @@ private:
         Nodo izq, der;
         Par mediana;
         dividir(u, izq, der, mediana);
-        contarDivision(u);
         const int32_t iDer = disco_.agregar(der);
         disco_.escribir(iU, izq);
         std::memmove(&nodo.llaves_valores[i + 1], &nodo.llaves_valores[i],

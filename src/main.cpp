@@ -15,8 +15,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <ctime>
 #include <memory>
 #include <random>
@@ -173,20 +171,19 @@ double construir(Arbol& arbol, const std::string& ruta, uint64_t n, double& tLec
 
 /**
  * @brief Construye un árbol en RAM, lo serializa a disco, libera la RAM y ejecuta las búsquedas desde disco.
- * @tparam Arbol   tipo de árbol.
- * @tparam Fabrica función que construye un std::unique_ptr<Arbol> vacío.
+ * @tparam Arbol tipo de árbol.
+ * @param arbol     árbol vacío recién creado; se destruye antes de las búsquedas (entrada).
  * @param tipo      identificador del árbol ("B", "BE4" o "BE126") (entrada).
  * @param alpha     parámetro α usado (0 para árbol B) (entrada).
- * @param crear     fábrica del árbol (entrada).
  * @param op        opciones del experimento (entrada).
  * @param exponente exponente tal que N = 2^exponente (entrada).
  * @param consultas rangos a buscar desde el archivo binario (entrada).
  * @param consulta0 si no es nullptr, recibe los pares ordenados de la consulta 0 (salida).
  * @return estructura con todas las métricas de creación, tamaño y búsqueda.
  */
-template <class Arbol, class Fabrica>
-MedicionArbol medirArbol(const std::string& tipo, double alpha, Fabrica crear, const Opciones& op, int exponente,
-                         const std::vector<Consulta>& consultas, std::vector<Par>* consulta0) {
+template <class Arbol>
+MedicionArbol medirArbol(std::unique_ptr<Arbol> arbol, const std::string& tipo, double alpha, const Opciones& op,
+                         int exponente, const std::vector<Consulta>& consultas, std::vector<Par>* consulta0) {
     MedicionArbol m;
     m.tipo = tipo;
     m.alpha = alpha;
@@ -197,17 +194,15 @@ MedicionArbol medirArbol(const std::string& tipo, double alpha, Fabrica crear, c
     if (alpha > 0) nombre << "_a" << alpha;
     nombre << "_N" << exponente << ".bin";
     const std::string ruta = nombre.str();
-    {
-        std::unique_ptr<Arbol> arbol = crear();
-        m.tInsercion = construir(*arbol, op.datos, m.n, m.tLecturaDatos);
-        m.lecturas = arbol->disco().lecturas();
-        m.escrituras = arbol->disco().escrituras();
-        m.est = arbol->estadisticas();
-        m.cont = arbol->contadores();
-        const auto t0 = Reloj::now();
-        arbol->disco().guardar(ruta);
-        m.tEscritura = std::chrono::duration<double>(Reloj::now() - t0).count();
-    }
+    m.tInsercion = construir(*arbol, op.datos, m.n, m.tLecturaDatos);
+    m.lecturas = arbol->disco().lecturas();
+    m.escrituras = arbol->disco().escrituras();
+    m.est = arbol->estadisticas();
+    m.cont = arbol->contadores();
+    const auto inicioEscritura = Reloj::now();
+    arbol->disco().guardar(ruta);
+    m.tEscritura = std::chrono::duration<double>(Reloj::now() - inicioEscritura).count();
+    arbol.reset();  // Libera el disco simulado: las búsquedas solo usan el archivo.
     ArchivoArbol<typename Arbol::Nodo> archivo(ruta);
     std::vector<Par> resultado;
     for (const Consulta& c : consultas) {
@@ -239,16 +234,13 @@ MedicionArbol medirArbol(const std::string& tipo, double alpha, Fabrica crear, c
 MedicionArbol medirTipo(const std::string& tipo, double alpha, const Opciones& op, int exponente,
                         const std::vector<Consulta>& consultas, std::vector<Par>* consulta0) {
     if (tipo == "B") {
-        return medirArbol<ArbolB340>(tipo, 0.0, [] { return std::make_unique<ArbolB340>(); }, op, exponente,
-                                     consultas, consulta0);
+        return medirArbol(std::make_unique<ArbolB340>(), tipo, 0.0, op, exponente, consultas, consulta0);
     }
     if (tipo == "BE4") {
-        return medirArbol<ArbolBe4>(tipo, alpha, [alpha] { return std::make_unique<ArbolBe4>(alpha); }, op,
-                                    exponente, consultas, consulta0);
+        return medirArbol(std::make_unique<ArbolBe4>(alpha), tipo, alpha, op, exponente, consultas, consulta0);
     }
     if (tipo == "BE126") {
-        return medirArbol<ArbolBe126>(tipo, alpha, [alpha] { return std::make_unique<ArbolBe126>(alpha); }, op,
-                                      exponente, consultas, consulta0);
+        return medirArbol(std::make_unique<ArbolBe126>(alpha), tipo, alpha, op, exponente, consultas, consulta0);
     }
     throw std::invalid_argument("tipo de árbol desconocido: " + tipo + " (use B, BE4 o BE126)");
 }
@@ -405,21 +397,21 @@ int comandoPrincipal(const Opciones& op) {
     std::FILE* fBusq = abrirCsv(op.resultados + "/principal_busquedas.csv", kEncabezadoBusqueda);
     for (int e = op.nMin; e <= op.nMax; ++e) {
         const bool guardar = std::find(op.guardarConsulta.begin(), op.guardarConsulta.end(), e) != op.guardarConsulta.end();
-        std::vector<Par> consulta0;
-        bool consultaGuardada = false;
         for (int rep = 0; rep < op.repeticiones; ++rep) {
             for (size_t j = 0; j < op.tipos.size(); ++j) {
                 const std::string& tipo = op.tipos[(j + static_cast<size_t>(rep)) % op.tipos.size()];
                 const double a = (tipo == "B") ? 0.0 : op.alpha;
+                // Los pares de la consulta 0 se guardan una vez por N: los de la primera construcción.
+                const bool guardarConsulta0 = guardar && rep == 0 && j == 0;
+                std::vector<Par> consulta0;
                 registrar("N=2^" + std::to_string(e) + " rep " + std::to_string(rep) + ": construyendo " + tipo);
-                MedicionArbol m = medirTipo(tipo, a, op, e, consultas, (guardar && !consultaGuardada) ? &consulta0 : nullptr);
+                MedicionArbol m = medirTipo(tipo, a, op, e, consultas, guardarConsulta0 ? &consulta0 : nullptr);
                 m.repeticion = rep;
                 escribirFilaArbol(fArboles, m);
                 escribirFilasBusquedas(fBusq, m);
                 registrar(describir(m));
-                if (guardar && !consultaGuardada) {
+                if (guardarConsulta0) {
                     guardarPares(op.resultados + "/consulta0_N" + std::to_string(e) + ".csv", consulta0);
-                    consultaGuardada = true;
                 }
             }
         }

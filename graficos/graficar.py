@@ -155,6 +155,12 @@ def agregar(arboles: list[dict], busquedas: list[dict], clave: str) -> dict:
         r["io_bus"], r["io_bus_desv"] = prom_desv([b["ios"] for b in bs])
         r["res_bus"], _ = prom_desv([b["resultados"] for b in bs])
         r["ms_por_io"] = statistics.fmean([b["tiempo_ms"] / b["ios"] for b in bs if b["ios"] > 0])
+        # Valores por par insertado. La raíz cuesta 1 I/O por inserción en el árbol B
+        # (lectura) y 2 en los Bε (lectura y escritura).
+        r["us_por_par"] = r["t_ins"] / r["N"] * 1e6
+        r["ios_por_par"] = r["ios_insercion"] / r["N"]
+        r["ios_por_par_sin_raiz"] = r["ios_por_par"] - (1 if k[0] == "B" else 2)
+        r["ios_lotes_por_par"] = 2 * r["lotes"] / r["N"]
         resumen[k] = r
     return resumen
 
@@ -307,9 +313,7 @@ def graficos_principal(resultados: str, salida: str) -> None:
     a.set_yscale("log")
     a.set_ylabel("tiempo de creación (s)")
     a.set_title("(a) Tiempo de creación")
-    for t in ARBOLES:
-        xs, ys = serie(res, t, "t_ins", exps)
-        b.plot(xs, [y / x * 1e6 for x, y in zip(xs, ys)], color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
+    dibujar(b, res, "us_por_par", exps)
     b.set_ylabel("µs por inserción")
     b.set_title("(b) Tiempo por par insertado")
     b.set_ylim(bottom=0)
@@ -325,15 +329,11 @@ def graficos_principal(resultados: str, salida: str) -> None:
     a.set_yscale("log")
     a.set_ylabel("I/Os (lecturas + escrituras)")
     a.set_title("(a) I/Os totales")
-    for t in ARBOLES:
-        xs, ys = serie(res, t, "ios_insercion", exps)
-        b.plot(xs, [y / x for x, y in zip(xs, ys)], color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
-        raiz = 1 if t == "B" else 2
-        c.plot(xs, [y / x - raiz for x, y in zip(xs, ys)], color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
+    dibujar(b, res, "ios_por_par", exps)
+    dibujar(c, res, "ios_por_par_sin_raiz", exps)
     modelo_linea = None
     for t in ("BE4", "BE126"):
-        xs, _ = serie(res, t, "lotes", exps)
-        modelo = [2 * res[(t, e)]["lotes"] / res[(t, e)]["N"] for e in exps if (t, e) in res]
+        xs, modelo = serie(res, t, "ios_lotes_por_par", exps)
         (modelo_linea,) = c.plot(xs, modelo, color="black", linestyle=":", linewidth=0.9, label="2 · lotes / N")
     b.set_ylabel("I/Os por inserción")
     b.set_title("(b) I/Os por par insertado")
@@ -375,10 +375,9 @@ def graficos_principal(resultados: str, salida: str) -> None:
     b.set_yscale("log")
     b.set_ylabel("I/Os por búsqueda")
     b.set_title("(b) I/Os promedio")
-    for t in ARBOLES:
-        xs, ys = serie(res, t, "io_bus", exps)
-        _, base = serie(res, "B", "io_bus", exps)
-        c.plot(xs, [y / bb for y, bb in zip(ys, base)], color=COLORES[t], marker=MARCADORES[t], label=ETIQUETAS[t])
+    for (_, e), r in res.items():
+        r["io_bus_rel_b"] = r["io_bus"] / res[("B", e)]["io_bus"]
+    dibujar(c, res, "io_bus_rel_b", exps)
     c.set_ylabel("I/Os / I/Os del árbol B")
     c.set_title("(c) Relativas al árbol B")
     coma_decimal(c)
@@ -492,6 +491,21 @@ def grafico_consulta(resultados: str, salida: str, exponentes: list[int]) -> Non
                    filas)
 
 
+def alpha_principal(resultados: str) -> float | None:
+    """Obtiene el α con que se construyeron los árboles Bε del experimento principal.
+
+    Parámetros:
+        resultados: carpeta con principal.csv (entrada).
+    Retorna:
+        el valor de α, o None si no hay principal.csv o si los Bε usaron más de un α.
+    """
+    ruta = os.path.join(resultados, "principal.csv")
+    if not os.path.exists(ruta):
+        return None
+    alphas = {f["alpha"] for f in leer_csv(ruta) if f["tipo"] != "B"}
+    return alphas.pop() if len(alphas) == 1 else None
+
+
 def graficos_alpha(resultados: str, salida: str, tipo: str = "BE126") -> None:
     """Genera la figura y la tabla del experimento bonus de α.
 
@@ -526,17 +540,20 @@ def graficos_alpha(resultados: str, salida: str, tipo: str = "BE126") -> None:
     d.plot(alphas, [r["io_bus"] for r in rs], color=color, marker="o")
     d.set_ylabel("I/Os por búsqueda")
     d.set_title("(d) Búsqueda: I/Os promedio")
-    elegido = 0.9
+    elegido = alpha_principal(resultados)
     for ax in (a, b, c, d):
         ax.set_xlabel("α")
         ax.set_xlim(0, 1)
         ax.xaxis.set_major_locator(FixedLocator([0, 0.2, 0.4, 0.6, 0.8, 1.0]))
-        ax.axvline(elegido, color="gray", linestyle="--", linewidth=0.8)
+        if elegido is not None:
+            ax.axvline(elegido, color="gray", linestyle="--", linewidth=0.8)
         coma_decimal(ax, "xy")
     for ax in (b, d):
         ys = ax.get_lines()[0].get_ydata()
         ax.set_ylim(min(ys) * 0.95, max(ys) * 1.05)
-    titulo = f"{ETIQUETAS[tipo]}, N = $2^{{{int(math.log2(n))}}}$ (línea punteada: α = 0,9)"
+    titulo = f"{ETIQUETAS[tipo]}, N = $2^{{{int(math.log2(n))}}}$"
+    if elegido is not None:
+        titulo += f" (línea punteada: α = {elegido:g})".replace(".", ",")
     fig.suptitle(titulo, fontsize=10)
     fig.tight_layout()
     guardar(fig, salida, f"alpha_{tipo}")

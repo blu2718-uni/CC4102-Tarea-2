@@ -88,9 +88,9 @@ public:
      * - Raíz hoja llena: split de hoja. R_izq y R_der van al final del arreglo,
      *   y una raíz interna nueva, con la llave divisoria y el par en su buffer,
      *   se escribe en el bloque 0.
-     * - Raíz interna: si su buffer está lleno, se hace flush. Si después la raíz
-     *   tiene c (o más) llaves, se divide y se crea una raíz nueva. Al final el
-     *   par se inserta en el buffer de la raíz y esta se escribe.
+     * - Raíz interna: si su buffer está lleno, se hace flush. Después, mientras la
+     *   raíz tenga c (o más) llaves, se divide y se crea una raíz nueva. Al final
+     *   el par se inserta en el buffer de la raíz y esta se escribe.
      *
      * @param p par a insertar (entrada).
      */
@@ -109,7 +109,7 @@ public:
             NodoTrabajo r;
             aTrabajo(raiz_, r);
             vaciar(r);
-            if (r.llaves.size() >= static_cast<size_t>(C)) dividirRaizInterna(r);
+            while (r.llaves.size() >= static_cast<size_t>(C)) dividirRaizInterna(r);
             aNodo(r, raiz_);
         }
         insertarOrdenado(raiz_.buffer, raiz_.k_buffer, p);
@@ -461,15 +461,15 @@ private:
     }
 
     /**
-     * @brief Split de la raíz interna cuando llega a C (o más) llaves.
+     * @brief Split de la raíz interna cuando llega a C (o más) llaves; agrega un nivel al árbol.
      *
      * A diferencia de los otros nodos, la raíz se divide ya con C llaves, como pide
      * el enunciado; por eso usa dividirYParticionar() y no particionar(). Las
      * mitades con más de C llaves se vuelven a dividir. Las partes van al final
      * del arreglo y r pasa a ser la raíz nueva (sin pares en el buffer), con las
      * llaves divisorias y los índices de esas partes. Quien llama la escribe en el
-     * bloque 0. En el caso, casi imposible, de que la raíz nueva también llegue a
-     * C llaves, se repite el proceso.
+     * bloque 0 y, en el caso casi imposible de que la raíz nueva también tenga C
+     * llaves, la vuelve a dividir.
      *
      * @param r copia de trabajo de la raíz; queda convertida en la raíz nueva (entrada/salida).
      */
@@ -487,7 +487,6 @@ private:
         nueva.llaves = std::move(separadores);
         r = std::move(nueva);
         ++altura_;
-        if (r.llaves.size() >= static_cast<size_t>(C)) dividirRaizInterna(r);
     }
 
     /**
