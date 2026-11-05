@@ -1,16 +1,15 @@
-// Informe de la Tarea 2 (CC4102): árboles B y Bε en memoria externa.
-// Compilar con: make informe (o typst compile informe/informe.typ informe/informe.pdf).
-//
-// Este archivo no tiene números de resultados escritos a mano. Todo lo que depende de la
-// corrida (figuras, tablas, números del texto y las afirmaciones que dependen de los datos)
-// se lee de figuras/, que genera graficos/graficar.py a partir de resultados/ en la máquina
-// que ejecutó los experimentos (ver README: make todo).
-
-#set document(title: "Tarea 2: Árboles B y Bε en memoria externa", author: "Julio Yáñez")
-#set page(paper: "a4", margin: (x: 2.2cm, top: 2.1cm, bottom: 2.3cm), numbering: "1")
-#set text(font: "New Computer Modern", size: 10.5pt, lang: "es")
-#set par(justify: true, leading: 0.6em, spacing: 0.85em)
-#set heading(numbering: "1.1.")
+#set document(
+  title: "Tarea 2: Árboles B y Bε en memoria externa",
+  author: "CC4102 - Diseño y Análisis de Algoritmos",
+)
+#set page(
+  paper: "us-letter",
+  margin: (top: 2.2cm, bottom: 2.2cm, left: 2.2cm, right: 2.2cm),
+  numbering: "1",
+)
+#set text(font: "Liberation Serif", size: 10.5pt, lang: "es")
+#set par(justify: true, leading: 0.65em)
+#set heading(numbering: "1.1")
 #show heading.where(level: 1): set block(above: 1.3em, below: 0.75em)
 #show heading.where(level: 2): set block(above: 1.05em, below: 0.6em)
 #show figure.caption: set text(size: 9pt)
@@ -77,115 +76,58 @@
 // ---------------------------------------------------------------------------
 
 #align(center)[
-  #text(size: 17pt, weight: "bold")[Tarea 2: Árboles B y #Be en memoria externa]
-  #v(0.15em)
-  #text(size: 11pt)[CC4102 Diseño y Análisis de Algoritmos · Semestre 2026-2]
-  #v(0.1em)
-  Julio Yáñez · #datetime.today().display("[day]-[month]-[year]")
+  #text(size: 11pt, weight: "bold")[Universidad de Chile]\
+  #text(size: 10pt)[Facultad de Ciencias Físicas y Matemáticas - Departamento de Ciencias de la Computación]\
+  #text(size: 10pt)[CC4102: Diseño y Análisis de Algoritmos]\
+  #v(0.8em)
+  #text(size: 16pt, weight: "bold")[Tarea 2: Árboles B y #Be en memoria externa]\
+  #v(0.4em)
+  #text(size: 11pt)[Implementación y evaluación experimental de árboles B y Bε]\
+  #v(0.8em)
+  #text(size: 11pt)[Integrantes: Bastián Caballero, Julio Yáñez e Isidora Moncada]\
+  #v(0.8em)
+  #line(length: 100%, stroke: 0.5pt)
 ]
-#v(0.4em)
+
+#v(0.5em)
 
 = Introducción
 
-En memoria externa, el costo de una operación se mide en transferencias de bloques entre el disco y la memoria principal (I/Os). El árbol B es la estructura clásica para un diccionario ordenado en este modelo: cada nodo ocupa un bloque con $Theta(B)$ llaves, por lo que insertar y buscar cuesta $Theta(log_B N)$ I/Os. El árbol #Be cambia ese equilibrio a favor de las inserciones: cada nodo interno usa solo del orden de $B^epsilon$ llaves divisorias y destina el resto del bloque a un _buffer_ de inserciones pendientes, que bajan a los hijos en lotes cuando el buffer se llena. Así, cada I/O de un vaciado mueve muchos pares a la vez y una inserción cuesta $O(log_B N \/ (epsilon B^(1-epsilon)))$ I/Os amortizadas, a cambio de una altura $O(log_B N \/ epsilon)$, que es lo que pagan las búsquedas.
+En memoria externa, el costo de una operación se mide en transferencias de bloques entre el disco y la memoria principal (I/Os). El árbol B es la estructura clásica para un diccionario ordenado, en este cada nodo ocupa un bloque con $Theta(B)$ llaves, por lo que insertar y buscar cuesta $Theta(log_B N)$ I/Os. El árbol #Be disminuye particularmente el costo de inserciones, en este caso, cada nodo interno usa solo del orden de $B^epsilon$ llaves divisorias y destina el resto del bloque a un buffer de inserciones pendientes que guarda los elementos que van llegando a diferencia del árbol B que las baja inmediatamente a sus hijos, cuando el buffer se llena, las inserciones pendientes son enviadas por lotes hacia los hijos. Así, cada I/O de un vaciado mueve muchos pares a la vez y una inserción cuesta $O(log_B N \/ (epsilon B^(1-epsilon)))$ I/Os amortizadas, a cambio de una altura $O(log_B N \/ epsilon)$, que es lo que pagan las búsquedas.
 
-En esta tarea se implementaron en C++ un árbol B ($b = 340$) y dos árboles #Be, todos con nodos de 4096 bytes: uno con $epsilon approx$ 0,25 ($c = 4$, $l_"max" = 506$) y otro con $epsilon approx$ 0,75 ($c = 126$, $l_"max" = 384$). Con ellos se indexaron los primeros $N in {#Nmin, ..., #Nmax}$ pares (tiempo Unix, temperatura) medidos en la estación Quinta Normal entre 2019 y 2025. Los árboles se construyen sobre un arreglo de bloques en RAM que simula el disco y cuenta cada lectura y escritura; después se guardan en un archivo binario y se hacen #val("busquedas_principal") búsquedas de rangos de una semana leyendo los nodos desde ese archivo. Se reportan el tiempo y las I/Os de la construcción, el tamaño y la altura de cada árbol, y el tiempo y las I/Os de las búsquedas. En el experimento bonus se estudia además el parámetro $alpha$ del vaciado con $N = #Na$.
+En esta tarea se implementa en C++ un árbol B ($b = 340$) y dos árboles #Be, con nodos de 4096 bytes, en donde uno posee $epsilon approx$ 0,25 (c = 4, $l_"max"$ = 506) y el otro $epsilon approx$ 0,75 (c = 126, $l_"max"$ = 384). Con ellos se indexaron los primeros $N in {#Nmin, ..., #Nmax}$ pares medidos en la estación Quinta Normal entre 2019 y 2025. Los árboles se construyen sobre un arreglo de bloques en RAM que simula el disco y cuenta cada lectura y escritura; luego se guardan en un archivo binario y se hacen #val("busquedas_principal") búsquedas de rangos de una semana leyendo los nodos desde ese archivo. Se reportan el tiempo y las I/Os de la construcción, el tamaño y la altura de cada árbol, el tiempo y las I/Os de las búsquedas. Además se estudia el parámetro $alpha$ del vaciado con $N = #Na$.
 
-La @sec:desarrollo describe las estructuras, los algoritmos y las decisiones de implementación que el enunciado deja abiertas. La @sec:resultados presenta el entorno, la metodología y los resultados; la @sec:analisis los analiza con el análisis amortizado de los vaciados y la altura en función de $epsilon$, y la @sec:conclusion concluye.
+En este informe también se describen las estructuras, los algoritmos y decisiones de implementación. Se presenta el entorno, la metodología y los resultados; para luego analizarlos con el análisis amortizado de los vaciados y la altura en función de $epsilon$, para finalmente concluir de acuerdo a la hipótesis inicial:
 
-*Hipótesis.* Un bloque de 4096 bytes tiene espacio para $B = 512$ pares de 8 bytes (el nodo del árbol B guarda 340, porque también almacena los índices de los hijos), y $B^"0,25" approx "4,8"$ y $B^"0,75" approx 108$, que corresponden aproximadamente a los 5 y 127 hijos de las dos configuraciones.
+*Hipótesis.* Un bloque de 4096 bytes tiene espacio para $B = 512$ pares de 8 bytes, $B^"0,25" approx "4,8"$ y $B^"0,75" approx 108$, que corresponden aproximadamente a los 5 y 127 hijos de las dos configuraciones.
 
-+ _Inserción._ El árbol B lee el camino desde la raíz y escribe la hoja: unas $h + 1$ I/Os por inserción, con una altura $h$ de 2 a 4 para estos $N$. En un árbol #Be cada inserción lee y escribe la raíz (2 I/Os) y los vaciados agregan poco, porque cada lote mueve muchos pares: con $epsilon approx$ 0,25 el hijo más poblado recibe al menos $ceil(506 \/ 5) = 102$ pares por vaciado, pero con $epsilon approx$ 0,75 solo $ceil(384 \/ 127) = 4$. Se espera entonces, en I/Os por inserción, #Be (0,25) < #Be (0,75) < B, con el primero muy cerca de 2. Como en la simulación cada I/O copia un bloque de 4 KiB, el tiempo de creación debería seguir el mismo orden.
-+ _Altura y búsqueda._ La altura de un #Be crece como $1\/epsilon$: el árbol con $epsilon approx$ 0,25 debería tener unas 3 veces la altura del de 0,75, que a su vez debería ser casi tan bajo como el árbol B. En búsquedas que tocan pocos nodos eso ordena los árboles como B $approx$ #Be (0,75) < #Be (0,25). Pero un rango de una semana contiene $approx$ 0,29 % de los datos (casi 200 000 pares con $N = 2^26$, cientos de bloques), así que para $N$ grande debería dominar el número de bloques con resultados y los tres árboles deberían acercarse.
-+ _Tamaño._ Las hojas de los #Be tienen espacio para más pares que las del árbol B (506 y 384 contra 340), así que deberían ocupar menos bloques, en especial con $c = 4$.
++ _Inserción._ En un árbol B, la inserción implica recorrer el camino desde la raíz hasta una hoja y a modificar esa hoja: aproximadamente $h + 1$ I/Os por par, donde $h$ está entre 2 y 4. En un árbol #Be, cada par se deja primero en el buffer de la raíz (2 I/Os). Solo cuando el buffer se llena se envía un lote de pares a un hijo. Por lo anterior, el costo de ese vaciado se reparte entre todos los pares del lote. Con $epsilon approx$ 0,25, cada vaciado lleva al menos $ceil(506 \/ 5) = 102$ pares al hijo más cargado; con $epsilon approx$ 0,75, lleva solo $ceil(384 \/ 127) = 4$, por tanto se espera que #Be con $epsilon approx$ 0,25 requiera menos I/Os por inserción que el de 0,75, y a su vez, ambos inferior que el árbol B.
++ _Altura y búsqueda._ La altura de un #Be crece como $1\/epsilon$: el árbol con $epsilon approx$ 0,25 tendría 3 veces la altura del de 0,75, que a su vez debería ser casi de la altura del árbol B. En búsquedas que tocan pocos nodos eso ordena los árboles como B $approx$ #Be (0,75) < #Be (0,25). Pero un rango de una semana contiene $approx$ 0,29 % de los datos, así que para $N$ grande debería dominar el número de bloques con resultados y los tres árboles deberían acercarse.
++ _Tamaño._ Las hojas de los #Be tienen espacio para más pares que las del árbol B (506 y 384 contra 340), por lo que que ocuparían menos bloques, sobre todo con $c = 4$.
 
 = Desarrollo <sec:desarrollo>
 
-== Organización del código
+== Disco y archivo
 
-Los árboles y los experimentos están en C++17 (`src/`). El código de los gráficos está aparte, en Python (`graficos/`), y solo lee los CSV que produce el programa. El repositorio no contiene resultados: todo lo que usa este informe (resultados, entorno, figuras, tablas y los números del texto) se genera en la máquina que ejecuta los experimentos, con `make todo`. Los árboles son plantillas parametrizadas por $b$ o por $(c, l_"max")$: el programa usa $b = 340$, $(4, 506)$ y $(126, 384)$, y las pruebas usan valores chicos como $b = 4$ o $(c, l_"max") = (4, 6)$, que generan árboles profundos con pocos datos y ejercitan todos los casos de split y vaciado. Cada estructura y función está documentada en el código con su propósito y sus parámetros de entrada y salida.
+Los nodos del disco simulado se reservan en segmentos de 1024 bloques (4 MiB) con `mmap`, incorporándolos a medida que el árbol crece. Así se evita reservar de inmediato la memoria del árbol más grande.
 
-#figure(
-  tabla(
-    ([*Archivo*], [*Contenido*]),
-    (
-      [`par.hpp`, `arbol_comun.hpp`], [par llave-valor de 8 bytes (mismo formato que `datos.bin`), inserción ordenada y mezcla de lotes],
-      [`disco.hpp`], [disco simulado en RAM: lecturas y escrituras de bloques con conteo de I/Os; escritura del árbol a archivo],
-      [`archivo.hpp`], [escritura de archivos de bloques y lectura de un nodo con `pread` y `O_DIRECT`, verificando que la lectura vaya al disco],
-      [`arbol_b.hpp`, `arbol_be.hpp`], [árbol B y árbol #Be: splits, vaciado, inserción y búsqueda por rango],
-      [`medicion.hpp`], [tiempo de CPU e indicadores de interferencia de la máquina],
-      [`datos.hpp`, `main.cpp`], [lectura de `datos.bin`; experimentos, elección de $alpha$, latencia del disco, consultas y CSV],
-      [`tests/pruebas.cpp`], [pruebas de correctitud (invariantes, I/Os exactas, comparación con fuerza bruta)],
-      [`scripts/entorno.sh`], [registro del entorno de la máquina (SO, CPU, cachés, RAM, disco, compilador)],
-    ),
-    izquierda: 2,
-  ),
-  caption: [Archivos del programa.],
-) <tab:archivos>
-
-== Nodos, disco simulado y archivo
-
-Los nodos son `struct` con exactamente los campos del enunciado y en el mismo orden (`NodoB<340>`, `NodoBe<4,506>` y `NodoBe<126,384>`); un `static_assert` comprueba que cada uno mide 4096 bytes. Como no contienen punteros, un nodo se guarda y se lee copiando sus bytes.
-
-El disco simulado es un arreglo de nodos en RAM con tres operaciones, y los algoritmos solo acceden a los nodos a través de ellas: `leer(i, nodo)` copia el bloque $i$ completo a una variable local y cuenta una lectura; `escribir(i, nodo)` copia la variable al bloque $i$ y cuenta una escritura; y `agregar(nodo)` la escribe al final, cuenta una escritura y retorna su posición. Como los algoritmos trabajan siempre sobre copias locales, igual que si hubieran traído el bloque del disco, los contadores son exactamente la cantidad de bloques transferidos. La raíz está siempre en el bloque 0.
-
-El arreglo no es un `std::vector`. Al crecer, un vector reserva un arreglo del doble de tamaño y copia el anterior, así que con el árbol B de $N = 2^26$ (más de 1 GiB) habría necesitado por un momento el doble de memoria. En su lugar, los bloques se guardan en segmentos de 1024 nodos (4 MiB) reservados con `mmap`, que se agregan cuando hacen falta y se devuelven al sistema operativo al destruir el árbol. Para los algoritmos sigue siendo un arreglo indexado por posición.
-
-Al terminar las inserciones, el árbol se escribe en un archivo binario, bloque por bloque y en orden (el nodo $i$ queda en el byte $i dot 4096$), se hace `fsync` y se le pide al sistema operativo que saque el archivo de su caché de páginas (`posix_fadvise`). Después se destruye el árbol en RAM. Las búsquedas abren el archivo con `O_DIRECT`: leer el nodo $i$ es un `pread` de 4096 bytes en la posición $i dot 4096$ hacia un buffer alineado, que va al dispositivo sin pasar por la caché del sistema operativo. Sin `O_DIRECT`, después de la primera búsqueda el archivo quedaría en esa caché y se mediría la velocidad de la RAM. Cada nodo leído es una I/O de búsqueda.
-
-Hay dos casos en que `O_DIRECT` se acepta pero no lee del disco: si el archivo está en `tmpfs` (en RAM) y si está en Btrfs con compresión (la opción por defecto de Fedora), porque Btrfs lee los bloques comprimidos con caché. Por eso el archivo se crea con el atributo NOCOW (como `chattr +C`), que en Btrfs desactiva la compresión, y al abrirlo se verifica el tipo de sistema de archivos y, con `FIEMAP`, que ningún bloque del archivo quedó comprimido. Si algo falla, la columna `odirect` de los resultados queda en 0 con el motivo.
-
-== Árbol B
-
-La inserción sigue el esquema del enunciado, con división preventiva: antes de bajar a un hijo lleno ($k = b$), se lo divide en el par de la posición $b\/2 = 170$, que deja 169 pares a la izquierda y 170 a la derecha. $U_"der"$ se agrega al final, $U_"izq"$ reemplaza a $U$ y el padre, que siempre tiene espacio porque nunca se entra a un nodo lleno, recibe la mediana y se escribe. La inserción continúa en la mitad que corresponde, que ya está en memoria y no se vuelve a leer. Una raíz llena se divide igual: ambas mitades van al final del arreglo y la nueva raíz al bloque 0.
-
-La búsqueda por rango recorre cada nodo en orden (hijo, par, hijo, …) y baja solo a los hijos cuyo rango intersecta $[l, u]$. Con $a$ el primer índice cuya llave es $>= l$ y $z$ el primero cuya llave es $> u$ (búsquedas binarias), visita los hijos $a, ..., z$ y reporta los pares $a, ..., z - 1$. Por eso el resultado queda ordenado por llave.
+Las búsquedas se realizan con `O_DIRECT`, tras sincronizar el archivo y descartar sus páginas de la caché. Esto permite medir accesos al disco y no lecturas que el sistema operativo ya mantenga en RAM. En Btrfs se usa NOCOW y se verifica con `FIEMAP` que los bloques no estén comprimidos; si no se puede asegurar lectura directa, se registra la condición en los resultados.
 
 == Árbol #Be <sec:be>
 
-*Inserción.* Cada inserción lee la raíz y la escribe con el par agregado a su buffer. Si la raíz es una hoja llena, se divide en la posición $l_"max"\/2$, como indica el enunciado, y se crea una raíz interna con el par en su buffer. Si la raíz es interna y su buffer está lleno, primero se vacía; si con eso llega a $c$ llaves, se divide y se crea una raíz nueva en el bloque 0.
+- Durante un vaciado, el nodo que lo inicia se conserva en memoria y se escribe una sola vez al finalizar. Esto evita escrituras intermedias al procesar sus lotes.
 
-*Vaciado de un nodo $V$.* Como el buffer está ordenado, el grupo de cada hijo es un tramo contiguo, cuyos límites se encuentran con una búsqueda binaria por llave divisoria. Con $f = ceil(k_"buffer" \/ (k_"llaves" + 1))$ se eligen los hijos que tienen al menos $ceil(alpha f)$ pares; los pares de los demás se quedan en $V$. Los hijos elegidos se procesan de derecha a izquierda: para cada uno se lee el hijo $U$ y se le entrega su lote de $m$ pares.
-- Si $U$ es interno y $k_"buffer" (U) + m > l_"max"$, se vacía $U$ (recursivamente) hasta que el lote quepa. Después se mezcla el lote con el buffer de $U$ (mezcla de dos arreglos ordenados).
-- Si $U$ es una hoja y el lote no cabe, se divide la hoja (ver abajo).
+- Al dividir una hoja que recibe un lote, primero se mezclan sus pares con el lote y luego se parte el resultado por la mediana, de esta forma ambas hojas quedan dentro de su capacidad.
 
-Durante su vaciado, $V$ se mantiene en memoria como una _copia de trabajo_ y se escribe una sola vez, al final, por quien lo llamó. Así, el vaciado no agrega I/Os propias (el nodo ya está en memoria) y cada lote cuesta 1 lectura y 1 escritura del hijo, más 1 escritura por cada nodo nuevo que aparezca al dividirlo (@tab:costos).
+- Las llaves creadas por divisiones durante un vaciado se incorporan mientras el nodo padre está en memoria; antes de escribirlo, se divide por la mediana las veces necesarias. Con ello se mantiene la estructura válida sin escribir el padre después de cada división hija.
 
-*Decisiones propias en los splits.*
-- _Split de hoja al recibir un lote._ El enunciado divide la hoja en la posición $l_"max"\/2$ y después reparte el lote, pero si el lote cae entero a un lado esa mitad puede quedar con más de $l_"max"$ pares. En vez de eso, se mezclan los $s = k_"buffer" + m$ pares ($s <= 2 l_"max"$) y se cortan en la mediana: los primeros $ceil(s\/2)$ quedan en $U_"izq"$, en la posición de $U$, y el resto en $U_"der"$, al final del arreglo. La llave del último par de $U_"izq"$ sube como divisoria. Es lo mismo que dividir y repartir, pero garantiza que ambas hojas quedan con entre $l_"max"\/2$ y $l_"max"$ pares.
-- _Split de nodo interno._ Si en un mismo vaciado se dividen varios hijos, $V$ recibe varias llaves nuevas. Como $V$ está en memoria, se aceptan todas y, antes de escribirlo, se divide en su llave mediana (la de índice $floor((K-1)\/2)$ de sus $K$ llaves, desde 0), repitiendo en cada mitad que siga con más de $c$ llaves; el buffer se reparte en $<= k_m$ y $> k_m$. Con $K = c + 1$ quedan $c\/2$ llaves en cada mitad (2 y 2 con $c = 4$; 63 y 63 con $c = 126$). Con $K = c$, el caso habitual de la raíz (que se divide en cuanto tiene $c$ o más llaves), resultan las $c\/2 - 1$ y $c\/2$ llaves del enunciado. Las mitades nuevas se agregan al final y sus llaves se insertan en el padre justo a la derecha del hijo dividido; como los hijos se procesan de derecha a izquierda, los índices de los que faltan no cambian.
-- _Umbral exacto._ $alpha$ se guarda como el entero $alpha dot 10^6$ y $ceil(alpha f)$ se calcula con aritmética entera, porque en punto flotante, por ejemplo, $100 dot "0,07" = "7,000000000000001"$ y el techo daría 8 en vez de 7.
+- El valor de $alpha$ se representa como un entero escalado por $10^6$ y el umbral se calcula con aritmética entera. Esto hace que $ceil(alpha f)$ sea reproducible y no dependa de redondeos de punto flotante.
 
-*Búsqueda.* En cada nodo se reportan los pares del buffer que están en $[l, u]$ (dos búsquedas binarias) y, si es interno, se baja a los hijos cuyo rango intersecta $[l, u]$, como en el árbol B. El resultado no queda ordenado, porque el buffer de un nodo puede tener pares posteriores a los de sus hijos; se ordena solo al escribirlo en un CSV.
+- Las búsquedas tratan los intervalos de los hijos como cerrados al decidir cuáles visitar. Así se incluyen todos los pares cuando una llave repetida queda a ambos lados de una llave divisoria. El resultado se ordena antes de escribir el CSV para entregar las consultas en orden de llave.
 
-*Llaves repetidas.* Los datos tienen #val("datos_repetidas") llaves repetidas. Un split puede dejar pares con la misma llave a ambos lados de una llave divisoria, así que en ambos árboles se visita un hijo si su rango _cerrado_ $[k_(i-1), k_i]$ intersecta $[l, u]$. Las pruebas incluyen datos con muchas llaves repetidas y con una sola llave.
+== Verificación
 
-#figure(
-  tabla(
-    ([*Operación*], [*Lecturas*], [*Escrituras*]),
-    (
-      [Árbol B: insertar un par sin splits (altura $h$)], [$h$], [1],
-      [Árbol B: split de un nodo o de la raíz], [0], [3],
-      [#Be: insertar un par en el buffer de la raíz], [1], [1],
-      [#Be: entregar un lote a un hijo], [1], [1],
-      [#Be: cada nodo nuevo que crea un split], [0], [1],
-      [Búsqueda (ambos): cada nodo visitado, desde el archivo], [1], [0],
-    ),
-  ),
-  caption: [I/Os que cuenta la implementación por cada operación.],
-) <tab:costos>
-
-== Experimentos y verificación
-
-El ejecutable `build/tarea2` tiene los comandos `principal` ($N = 2^15, ..., 2^26$ con los tres árboles), `alpha` (bonus), `latencia` y `datos` (mediciones del disco y de `datos.bin` para este informe) y `consulta`/`buscar` (una búsqueda puntual). Para cada $N$ y cada árbol:
-+ se leen los primeros $N$ pares de `datos.bin` en bloques de 65 536 y se insertan uno a uno; el tiempo de creación (`steady_clock`) cuenta solo las inserciones, no la lectura del archivo, y se registra también el tiempo de CPU del proceso;
-+ se registran las I/Os simuladas y la estructura del árbol (nodos, altura, ocupación, vaciados, lotes y splits);
-+ se guarda el árbol en disco y se libera su RAM;
-+ se hacen las búsquedas sobre el archivo, midiendo el tiempo y las I/Os de cada una.
-
-Los rangos se generan una vez con `mt19937_64` y semilla fija: $l$ uniforme en $[1 thin 546 thin 300 thin 800, 1 thin 754 thin 006 thin 400]$ y $u = l + 604 thin 800$. Son los mismos para todos los $N$ y árboles, lo que permite comparar una misma búsqueda. Cada construcción se repite varias veces, y el orden de los árboles (y de los $alpha$ en el bonus) rota en cada repetición, para que una interferencia pasajera de la máquina no caiga siempre sobre la misma configuración. Además de los tiempos, se registran indicadores de interferencia durante cada construcción y sus búsquedas: el tiempo de CPU del proceso, los cambios de contexto involuntarios, los fallos de página mayores, la presión de CPU y memoria que informa el kernel (PSI) y el tiempo robado por el hipervisor.
-
-Cada búsqueda se compara con una búsqueda por fuerza bruta sobre los primeros $N$ pares (cantidad de pares, suma de llaves y suma de los bits de las temperaturas); si alguna no coincide, el programa termina con error. #if cond("hay_pruebas") [Además, `tests/pruebas.cpp` hace #val("pruebas_verificaciones") verificaciones (#val("pruebas_fallas") fallas en esta máquina)] else [Además, `tests/pruebas.cpp` hace miles de verificaciones]: cuenta las I/Os exactas de casos pequeños hechos a mano; valida todas las invariantes después de cada inserción en árboles chicos (orden, rangos de los subárboles, ocupación, hojas al mismo nivel, altura, ningún nodo perdido y el mismo multiconjunto de pares que se insertó), y compara búsquedas con fuerza bruta sobre datos aleatorios, ordenados, con llaves repetidas y extremas, y sobre una muestra de `datos.bin`.
+Cada búsqueda se compara con fuerza bruta sobre el mismo prefijo de datos y el programa termina con error ante una diferencia. Por otra parte, las pruebas automatizadas revisan invariantes de los árboles, conteos de I/O y casos con llaves repetidas y valores extremos, lo que permite detectar errores de estructura antes de analizar las mediciones.
 
 = Resultados <sec:resultados>
 
