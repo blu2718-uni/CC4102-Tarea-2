@@ -2,10 +2,8 @@
 data/
 *.bin
 
-# Todo lo que generan los experimentos y el informe se produce en la máquina que los ejecuta
+# Resultados crudos de los experimentos (se regeneran con make alpha / make principal)
 resultados/
-informe/figuras/
-informe/informe.pdf
 
 # Compilación y herramientas
 arboles/

@@ -327,9 +327,14 @@
   let pn-max = arboles.map(t => p-rango * pp(nmax, t, "nodos"))
   v.insert("pn_max_min", fmt(calc.min(..pn-max)))
   v.insert("pn_max_max", fmt(calc.max(..pn-max)))
-  let ms-io-p = exps.map(e => arboles.map(t => pp(e, t, "t_bus") / pp(e, t, "io_bus"))).flatten()
-  v.insert("ms_io_min", fmt(calc.min(..ms-io-p), d: 2))
-  v.insert("ms_io_max", fmt(calc.max(..ms-io-p), d: 2))
+  // ms por I/O de búsqueda, separando N chico (pocos bloques por búsqueda) de N >= 2^20.
+  let ms-io-de(es) = es.map(e => arboles.map(t => pp(e, t, "t_bus") / pp(e, t, "io_bus"))).flatten()
+  let ms-io-g = ms-io-de(exps.filter(e => e >= 20))
+  let ms-io-c = ms-io-de(exps.filter(e => e < 20))
+  v.insert("ms_io_min", fmt(calc.min(..ms-io-g), d: 2))
+  v.insert("ms_io_max", fmt(calc.max(..ms-io-g), d: 2))
+  v.insert("ms_io_chico_min", fmt(calc.min(..ms-io-c), d: 2))
+  v.insert("ms_io_chico_max", fmt(calc.max(..ms-io-c), d: 2))
 
   // Conclusión.
   b.insert("h1_io", b.orden_io_todos)
@@ -421,7 +426,7 @@ En este informe también se describen las estructuras, los algoritmos y las deci
 
 == Disco y archivo
 
-Los nodos del disco simulado se reservan en segmentos de 1024 bloques (4 MiB) con `mmap`, incorporándolos a medida que el árbol crece. Así se evita reservar de inmediato la memoria del árbol más grande.
+Los nodos del disco simulado se reservan en segmentos de 1024 bloques (4 MiB), incorporándolos a medida que el árbol crece. Así se evita reservar de inmediato la memoria del árbol más grande y, a diferencia de un `std::vector`, crecer no obliga a copiar los nodos que ya están.
 
 Las búsquedas se realizan con `O_DIRECT`, tras sincronizar el archivo y descartar sus páginas de la caché. Esto permite medir accesos al disco y no lecturas que el sistema operativo ya mantenga en RAM.
 
@@ -433,7 +438,7 @@ Las búsquedas se realizan con `O_DIRECT`, tras sincronizar el archivo y descart
 
 - Las llaves creadas por divisiones durante un vaciado se incorporan mientras el nodo padre está en memoria; antes de escribirlo, se divide por la mediana las veces necesarias. Con ello se mantiene la estructura válida sin escribir el padre después de cada división hija.
 
-- El valor de $alpha$ se representa como un entero escalado por $10^6$ y el umbral se calcula con aritmética entera.
+- En un vaciado, un hijo recibe su grupo de pares si este tiene al menos $max(1, ceil(alpha f))$ pares, con $f = ceil(k \/ (c' + 1))$, donde $k$ es la cantidad de pares en el buffer y $c'$ la de llaves divisorias del nodo.
 
 - Las búsquedas tratan los intervalos de los hijos como cerrados al decidir cuáles visitar. Así se incluyen todos los pares cuando una llave repetida queda a ambos lados de una llave divisoria. El resultado se ordena antes de escribir el CSV para entregar las consultas en orden de llave.
 
@@ -621,7 +626,7 @@ donde $n$ es el total de nodos. Con $p = 604 thin 800 \/ 207 thin 705 thin 600 =
 - Con $N$ chico#if cond("pn_min_menor_1") [, $p dot n$ es menor que 1 (a lo más #val("pn_min_max") con $N = #Nmin$) y] manda la altura: con $N = #Nmin$, el #Be4 ($h = #val("altura_BE4_min")$) hace #val("rel_BE4_min") veces las I/Os del árbol B ($h = #val("altura_B_min")$).
 - Con $N$ grande manda $p dot n$ (con $N = #Nmax$, de #val("pn_max_min") a #val("pn_max_max"), contra alturas de #val("altura_B_max") a #val("altura_BE4_max")), y el orden lo da el tamaño. El #Be4 tiene #val("menos_nodos_BE4") % menos nodos que el árbol B porque sus hojas guardan #val("pares_hoja_BE4") pares en promedio contra #val("pares_hoja_B"), y porque guarda el #val("pct_internos_BE4") % de los pares en buffers de nodos internos, que en el árbol B solo sirven para dirigir la búsqueda. #if cond("hay_cruce") [Las curvas se cruzan cerca de $N = #pots(lst("cruce"))$, cuando la diferencia de tamaño compensa la diferencia de altura.]
 
-Por lo tanto, para estos rangos el árbol más bajo no es necesariamente el más rápido, sino el más compacto. En una búsqueda puntual el costo sería solo la altura (#val("altura_B_max"), #val("altura_BE126_max") y #val("altura_BE4_max") I/Os con $N = #Nmax$ para cada uno de los árboles), y el árbol B y el #Be126 serían más baratos que el #Be4. El tiempo de búsqueda es casi exactamente las I/Os por la latencia del disco: entre #val("ms_io_min") y #val("ms_io_max") ms por I/O en todos los $N$ y árboles, así que revisar los buffers de los nodos visitados no tiene un costo de CPU apreciable.
+Por lo tanto, para estos rangos el árbol más bajo no es necesariamente el más rápido, sino el más compacto. En una búsqueda puntual el costo sería solo la altura (#val("altura_B_max"), #val("altura_BE126_max") y #val("altura_BE4_max") I/Os con $N = #Nmax$ para cada uno de los árboles), y el árbol B y el #Be126 serían más baratos que el #Be4. El tiempo de búsqueda crece con las I/Os: con $N >= 2^20$ cada I/O cuesta entre #val("ms_io_min") y #val("ms_io_max") ms en los tres árboles, mientras que con $N$ menor las búsquedas leen pocos bloques y el costo por I/O es menor (#val("ms_io_chico_min")–#val("ms_io_chico_max") ms). Como el costo por I/O es del mismo orden en los tres árboles, el tiempo de búsqueda queda dominado por las lecturas del disco y no por revisar los buffers de los nodos visitados.
 
 #figure(
   tabla(
